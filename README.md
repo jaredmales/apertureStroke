@@ -28,7 +28,14 @@ Run the supplied circular and GMT configurations:
 
 Command-line options override values from the configuration file. For a quick
 setup check that writes the pupil and optional basis without constructing fit
-matrices or generating turbulence, set `--trials=0`.
+matrices or generating turbulence, set `--simulation.trials=0`.
+
+Long options follow the same `section.key` convention as configuration-file
+targets. For example:
+
+```bash
+--atmosphere.subharmonicLevel=4 --output.directory=output/circle_25m_sh4
+```
 
 The exact configured `output.directory` is created recursively. Pupil, phase,
 run-parameter, histogram, and statistics products are written beneath it.
@@ -61,3 +68,26 @@ centralObscuration=0.27
 The turbulence grid diameter is calculated as
 `diameterMeters * arraySize / diameterPixels`, preserving the specified
 pixels per physical pupil even when the pupil is padded in its array.
+
+## Circular Zernike theory
+
+`zernikeTheory` calculates the Noll Kolmogorov prediction for an unobstructed
+circular aperture. It constructs and normalizes the same discrete pupil and
+Zernike basis as `apertureStroke`, then converts modal P2V to microns surface.
+
+The simulation configuration can be used directly:
+
+```bash
+make zernikeTheory
+./zernikeTheory -c circle_25m.conf
+```
+
+This writes `output/circle_25m/zernike_theory_circle_25m.dat`. Columns 2 and 3
+are the predicted mean absolute modal P2V and RMS about that mean, matching the
+`mean` and `rms` columns in the measured `zernike_p2v` tables. Seeing is
+converted to r0 at its reference wavelength and then scaled to the configured
+phase wavelength before applying the Noll variance.
+
+The utility intentionally rejects FITS pupils, central obscurations, nonzero
+outer scale, and non-Zernike bases because those are outside the circular Noll
+prediction.

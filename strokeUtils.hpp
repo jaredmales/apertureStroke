@@ -13,6 +13,7 @@
 
 #include <mx/improc/eigenCube.hpp>
 #include <mx/improc/eigenImage.hpp>
+#include <mx/improc/imageMasks.hpp>
 #include <mx/math/histogramUniform.hpp>
 #include <mx/math/vectorUtils.hpp>
 #include <mx/sigproc/fourierModes.hpp>
@@ -20,6 +21,36 @@
 
 namespace aperture_stroke
 {
+
+template<typename realT>
+int makeCircularPupil(mx::improc::eigenImage<realT> & pupil,
+                      int arraySize,
+                      realT diameterPixels,
+                      realT centralObscuration = 0)
+{
+    if(arraySize <= 0 || diameterPixels <= 0 || diameterPixels > arraySize)
+    {
+        return -1;
+    }
+    if(centralObscuration < 0 || centralObscuration >= 1)
+    {
+        return -1;
+    }
+
+    pupil.resize(arraySize, arraySize);
+    pupil.setZero();
+
+    realT outerRadius = 0.5 * diameterPixels;
+    mx::improc::maskCircle(pupil, outerRadius, static_cast<realT>(1));
+    if(centralObscuration > 0)
+    {
+        mx::improc::maskCircle(pupil,
+                               centralObscuration * outerRadius,
+                               static_cast<realT>(0));
+    }
+
+    return pupil.sum() > 0 ? 0 : -1;
+}
 
 enum class BasisFit
 {

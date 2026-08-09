@@ -68,6 +68,7 @@ class apertureStroke : public mx::app::application
     bool writePupil {true};
     bool writeBasis {false};
     bool writePhaseScreens {true};
+    bool configError {false};
 
     apertureStroke()
     {
@@ -78,95 +79,95 @@ class apertureStroke : public mx::app::application
 
     void setupConfig() override
     {
-        config.add("pupilFile", "", "pupil-file", mx::app::argType::Required,
+        config.add("pupilFile", "", "pupil.file", mx::app::argType::Required,
                    "pupil", "file", false, "string",
                    "Path to a FITS pupil mask. If empty, a circular pupil is constructed.");
-        config.add("pupilName", "", "pupil-name", mx::app::argType::Required,
+        config.add("pupilName", "", "pupil.name", mx::app::argType::Required,
                    "pupil", "name", false, "string",
                    "Short pupil name used in output filenames.");
-        config.add("pupilArraySize", "", "pupil-array-size", mx::app::argType::Required,
+        config.add("pupilArraySize", "", "pupil.arraySize", mx::app::argType::Required,
                    "pupil", "arraySize", false, "int",
                    "Square array size for a constructed circular pupil.");
-        config.add("pupilDiameterPixels", "", "pupil-diameter-pixels", mx::app::argType::Required,
+        config.add("pupilDiameterPixels", "", "pupil.diameterPixels", mx::app::argType::Required,
                    "pupil", "diameterPixels", false, "real",
                    "Outer pupil diameter in pixels; defaults to the array size.");
-        config.add("pupilDiameterMeters", "", "pupil-diameter-meters", mx::app::argType::Required,
+        config.add("pupilDiameterMeters", "", "pupil.diameterMeters", mx::app::argType::Required,
                    "pupil", "diameterMeters", false, "real",
                    "Physical outer pupil diameter in meters.");
-        config.add("pupilCentralObscuration", "", "pupil-central-obscuration", mx::app::argType::Required,
+        config.add("pupilCentralObscuration", "", "pupil.centralObscuration", mx::app::argType::Required,
                    "pupil", "centralObscuration", false, "real",
                    "Central-obscuration diameter divided by outer diameter for a circular pupil.");
-        config.add("pupilThreshold", "", "pupil-threshold", mx::app::argType::Required,
+        config.add("pupilThreshold", "", "pupil.threshold", mx::app::argType::Required,
                    "pupil", "threshold", false, "real",
                    "FITS pupil values at or above this value are included in the binary mask.");
 
-        config.add("nTrials", "", "trials", mx::app::argType::Required,
+        config.add("nTrials", "", "simulation.trials", mx::app::argType::Required,
                    "simulation", "trials", false, "int", "Number of independent phase screens.");
-        config.add("turbulenceOversize", "", "turbulence-oversize", mx::app::argType::Required,
+        config.add("turbulenceOversize", "", "simulation.oversize", mx::app::argType::Required,
                    "simulation", "oversize", false, "int",
                    "Integer grid oversize; 1 adds one wavefront width on each side.");
-        config.add("wavelength", "", "wavelength", mx::app::argType::Required,
+        config.add("wavelength", "", "simulation.wavelength", mx::app::argType::Required,
                    "simulation", "wavelength", false, "real",
                    "Phase-screen wavelength in meters.");
-        config.add("seeingArcsec", "", "seeing", mx::app::argType::Required,
+        config.add("seeingArcsec", "", "atmosphere.seeing", mx::app::argType::Required,
                    "atmosphere", "seeing", false, "real",
                    "Seeing FWHM in arcseconds; a negative value keeps the mxlib LCO default.");
-        config.add("seeingWavelength", "", "seeing-wavelength", mx::app::argType::Required,
+        config.add("seeingWavelength", "", "atmosphere.seeingWavelength", mx::app::argType::Required,
                    "atmosphere", "seeingWavelength", false, "real",
                    "Wavelength in meters at which seeing is specified.");
-        config.add("outerScale", "", "outer-scale", mx::app::argType::Required,
+        config.add("outerScale", "", "atmosphere.outerScale", mx::app::argType::Required,
                    "atmosphere", "outerScale", false, "real",
                    "Outer scale in meters; 0 is Kolmogorov/infinite and a negative value keeps the mxlib default.");
-        config.add("subharmonicLevel", "", "subharmonic-level", mx::app::argType::Required,
+        config.add("subharmonicLevel", "", "atmosphere.subharmonicLevel", mx::app::argType::Required,
                    "atmosphere", "subharmonicLevel", false, "int",
                    "Subharmonic level passed to turbAtmosphere.");
-        config.add("outerSubHarmonics", "", "outer-subharmonics", mx::app::argType::Required,
+        config.add("outerSubHarmonics", "", "atmosphere.outerSubHarmonics", mx::app::argType::Required,
                    "atmosphere", "outerSubHarmonics", false, "bool",
                    "Whether turbAtmosphere includes outer subharmonics.");
 
-        config.add("basisType", "", "basis-type", mx::app::argType::Required,
+        config.add("basisType", "", "basis.type", mx::app::argType::Required,
                    "basis", "type", false, "string", "Primary basis type: zernike or file.");
-        config.add("basisFile", "", "basis-file", mx::app::argType::Required,
+        config.add("basisFile", "", "basis.file", mx::app::argType::Required,
                    "basis", "file", false, "string", "FITS cube used when basis.type=file.");
-        config.add("basisName", "", "basis-name", mx::app::argType::Required,
+        config.add("basisName", "", "basis.name", mx::app::argType::Required,
                    "basis", "name", false, "string", "Primary basis name used in output filenames.");
-        config.add("prefixFile", "", "prefix-file", mx::app::argType::Required,
+        config.add("prefixFile", "", "basis.prefixFile", mx::app::argType::Required,
                    "basis", "prefixFile", false, "string",
                    "Optional FITS cube prepended to every primary-mode cutoff, such as segment PTT modes.");
-        config.add("prefixName", "", "prefix-name", mx::app::argType::Required,
+        config.add("prefixName", "", "basis.prefixName", mx::app::argType::Required,
                    "basis", "prefixName", false, "string", "Prefix basis name used in output filenames.");
-        config.add("nModes", "", "modes", mx::app::argType::Required,
+        config.add("nModes", "", "basis.modes", mx::app::argType::Required,
                    "basis", "modes", false, "int",
                    "Number of primary modes; negative means 1000 Zernikes or all modes from a FITS cube.");
-        config.add("modeCutoffs", "", "mode-cutoffs", mx::app::argType::Required,
+        config.add("modeCutoffs", "", "basis.cutoffs", mx::app::argType::Required,
                    "basis", "cutoffs", false, "string",
                    "Primary-mode cutoffs: single, default, or a comma-separated list.");
-        config.add("fitMethod", "", "fit", mx::app::argType::Required,
+        config.add("fitMethod", "", "basis.fit", mx::app::argType::Required,
                    "basis", "fit", false, "string", "Fit method: sequential, lsq, or pinv.");
-        config.add("pinvAlpha", "", "pinv-alpha", mx::app::argType::Required,
+        config.add("pinvAlpha", "", "basis.pinvAlpha", mx::app::argType::Required,
                    "basis", "pinvAlpha", false, "real", "Pseudo-inverse Tikhonov regularization.");
-        config.add("pinvMaxCondition", "", "pinv-max-condition", mx::app::argType::Required,
+        config.add("pinvMaxCondition", "", "basis.pinvMaxCondition", mx::app::argType::Required,
                    "basis", "pinvMaxCondition", false, "real", "Pseudo-inverse maximum condition number.");
 
-        config.add("maxFourierM", "", "fourier-max-m", mx::app::argType::Required,
+        config.add("maxFourierM", "", "analysis.maxFourierM", mx::app::argType::Required,
                    "analysis", "maxFourierM", false, "int",
                    "Maximum modified-Fourier m index; 0 uses half the pupil array size.");
-        config.add("histogramMinimum", "", "histogram-min", mx::app::argType::Required,
+        config.add("histogramMinimum", "", "analysis.histogramMinimum", mx::app::argType::Required,
                    "analysis", "histogramMinimum", false, "real", "Histogram minimum in microns surface.");
-        config.add("histogramMaximum", "", "histogram-max", mx::app::argType::Required,
+        config.add("histogramMaximum", "", "analysis.histogramMaximum", mx::app::argType::Required,
                    "analysis", "histogramMaximum", false, "real", "Histogram maximum in microns surface.");
-        config.add("histogramBinWidth", "", "histogram-bin-width", mx::app::argType::Required,
+        config.add("histogramBinWidth", "", "analysis.histogramBinWidth", mx::app::argType::Required,
                    "analysis", "histogramBinWidth", false, "real", "Histogram bin width in microns surface.");
 
-        config.add("outputDirectory", "", "output-dir", mx::app::argType::Required,
+        config.add("outputDirectory", "", "output.directory", mx::app::argType::Required,
                    "output", "directory", false, "string", "Output directory, created if necessary.");
-        config.add("outputLabel", "", "output-label", mx::app::argType::Required,
+        config.add("outputLabel", "", "output.label", mx::app::argType::Required,
                    "output", "label", false, "string", "Label used in output filenames.");
-        config.add("writePupil", "", "write-pupil", mx::app::argType::Required,
+        config.add("writePupil", "", "output.writePupil", mx::app::argType::Required,
                    "output", "writePupil", false, "bool", "Write the binary pupil as FITS.");
-        config.add("writeBasis", "", "write-basis", mx::app::argType::Required,
+        config.add("writeBasis", "", "output.writeBasis", mx::app::argType::Required,
                    "output", "writeBasis", false, "bool", "Write the normalized combined basis as FITS.");
-        config.add("writePhaseScreens", "", "write-phase-screens", mx::app::argType::Required,
+        config.add("writePhaseScreens", "", "output.writePhaseScreens", mx::app::argType::Required,
                    "output", "writePhaseScreens", false, "bool", "Write the first input and final residual screens.");
     }
 
@@ -212,8 +213,36 @@ class apertureStroke : public mx::app::application
         config(writePhaseScreens, "writePhaseScreens");
     }
 
+    void checkConfig() override
+    {
+        std::vector<std::string> unusedSections;
+        config.unusedSections(unusedSections);
+        if(unusedSections.empty())
+        {
+            return;
+        }
+
+        configError = true;
+        std::cerr << "unrecognized command-line option or configuration key";
+        bool haveNamedSection = false;
+        for(const std::string & section : unusedSections)
+        {
+            if(!section.empty())
+            {
+                std::cerr << (haveNamedSection ? ", " : " in section(s): ") << section;
+                haveNamedSection = true;
+            }
+        }
+        std::cerr << '\n';
+    }
+
     int execute() override
     {
+        if(configError)
+        {
+            return -1;
+        }
+
         if(validateScalarConfig() < 0)
         {
             return -1;
@@ -649,14 +678,13 @@ class apertureStroke : public mx::app::application
                 return -1;
             }
 
-            pupil.resize(pupilArraySize, pupilArraySize);
-            pupil.setZero();
-            realT outerRadius = 0.5 * pupilDiameterPixels;
-            mx::improc::maskCircle(pupil, outerRadius, static_cast<realT>(1));
-            if(pupilCentralObscuration > 0)
+            if(pss::makeCircularPupil(pupil,
+                                      pupilArraySize,
+                                      pupilDiameterPixels,
+                                      pupilCentralObscuration) < 0)
             {
-                realT innerRadius = pupilCentralObscuration * outerRadius;
-                mx::improc::maskCircle(pupil, innerRadius, static_cast<realT>(0));
+                std::cerr << "error constructing circular pupil\n";
+                return -1;
             }
         }
 
