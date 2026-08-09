@@ -1,0 +1,3 @@
+TARGET = apertureStroke
+
+include $(MXMAKEFILE)
