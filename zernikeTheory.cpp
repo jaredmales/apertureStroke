@@ -299,9 +299,9 @@ class zernikeTheory : public mx::app::application
                << "# phase_to_surface_um_per_rad " << phaseToSurfaceMicrons << '\n'
                << "# surface values are wavefront/2\n"
                << "# mean and rms predict the absolute modal P2V and match columns 2 and 3 of zernike_p2v tables\n"
-               << "# rms is RMS about the mean for a half-normal distribution\n"
+               << "# rms is the true root-mean-square; stddev is RMS about the mean for a half-normal distribution\n"
                << "# p2v_over_rms is measured on the discrete mxlib circular pupil after basisNormalize\n"
-               << "#mode mean rms p2v_sigma noll_j variance_coeff variance_rad2 coeff_rms_rad p2v_over_rms\n";
+               << "#mode mean rms stddev noll_j variance_coeff variance_rad2 coeff_rms_rad p2v_over_rms\n";
 
         for(size_t n = 0; n < p2vOverRms.size(); ++n)
         {
@@ -321,10 +321,10 @@ class zernikeTheory : public mx::app::application
             realT coefficientRms = std::sqrt(variance);
             realT p2vSigma = coefficientRms * p2vOverRms[n] * phaseToSurfaceMicrons;
             realT mean = std::sqrt(static_cast<realT>(2) / mx::math::pi<realT>()) * p2vSigma;
-            realT rms = std::sqrt(static_cast<realT>(1) -
-                                  static_cast<realT>(2) / mx::math::pi<realT>()) * p2vSigma;
+            realT stddev = std::sqrt(static_cast<realT>(1) -
+                                     static_cast<realT>(2) / mx::math::pi<realT>()) * p2vSigma;
 
-            output << n + 1 << ' ' << mean << ' ' << rms << ' ' << p2vSigma << ' '
+            output << n + 1 << ' ' << mean << ' ' << p2vSigma << ' ' << stddev << ' '
                    << nollIndex << ' ' << varianceCoefficient << ' ' << variance << ' '
                    << coefficientRms << ' ' << p2vOverRms[n] << '\n';
         }

@@ -394,6 +394,44 @@ realT fourierModeP2VAmplitude(const mx::improc::eigenImage<realT> & image,
     return denominator == 0 ? 0 : std::abs(numerator / denominator);
 }
 
+template<typename vectorT>
+typename vectorT::value_type vectorRms(const vectorT & values)
+{
+    using valueT = typename vectorT::value_type;
+    if(values.empty())
+    {
+        return 0;
+    }
+
+    double sumSquares = 0;
+    for(valueT value : values)
+    {
+        sumSquares += static_cast<double>(value) * value;
+    }
+
+    return static_cast<valueT>(std::sqrt(sumSquares / values.size()));
+}
+
+template<typename vectorT>
+typename vectorT::value_type vectorStddev(const vectorT & values,
+                                          typename vectorT::value_type mean)
+{
+    using valueT = typename vectorT::value_type;
+    if(values.empty())
+    {
+        return 0;
+    }
+
+    double sumSquares = 0;
+    for(valueT value : values)
+    {
+        double difference = static_cast<double>(value) - mean;
+        sumSquares += difference * difference;
+    }
+
+    return static_cast<valueT>(std::sqrt(sumSquares / values.size()));
+}
+
 template<typename realT>
 void writeModeStats(const std::filesystem::path & fileName,
                     const std::vector<std::vector<float>> & values,
@@ -401,15 +439,16 @@ void writeModeStats(const std::filesystem::path & fileName,
                     size_t count)
 {
     std::ofstream output(fileName);
-    output << "#mode mean rms max\n";
+    output << "#mode mean rms stddev max\n";
 
     for(size_t n = 0; n < count; ++n)
     {
         const std::vector<float> & samples = values[first + n];
         realT mean = mx::math::vectorMean(samples);
-        realT rms = samples.size() > 1 ? std::sqrt(mx::math::vectorVariance(samples, mean)) : 0;
+        realT rms = vectorRms(samples);
+        realT stddev = vectorStddev(samples, mean);
         realT maxValue = *std::max_element(samples.begin(), samples.end());
-        output << n + 1 << ' ' << mean << ' ' << rms << ' ' << maxValue << '\n';
+        output << n + 1 << ' ' << mean << ' ' << rms << ' ' << stddev << ' ' << maxValue << '\n';
     }
 }
 
@@ -418,14 +457,15 @@ void writeFourierStats(const std::filesystem::path & fileName,
                        const std::vector<std::vector<float>> & values)
 {
     std::ofstream output(fileName);
-    output << "#m mean rms max\n";
+    output << "#m mean rms stddev max\n";
 
     for(size_t n = 0; n < values.size(); ++n)
     {
         realT mean = mx::math::vectorMean(values[n]);
-        realT rms = values[n].size() > 1 ? std::sqrt(mx::math::vectorVariance(values[n], mean)) : 0;
+        realT rms = vectorRms(values[n]);
+        realT stddev = vectorStddev(values[n], mean);
         realT maxValue = *std::max_element(values[n].begin(), values[n].end());
-        output << n + 1 << ' ' << mean << ' ' << rms << ' ' << maxValue << '\n';
+        output << n + 1 << ' ' << mean << ' ' << rms << ' ' << stddev << ' ' << maxValue << '\n';
     }
 }
 
@@ -435,16 +475,18 @@ void writeResidualStats(const std::filesystem::path & fileName,
                         const std::vector<float> & p2pDifference)
 {
     std::ofstream output(fileName);
-    output << "#metric mean rms max\n";
+    output << "#metric mean rms stddev max\n";
 
     realT mean = mx::math::vectorMean(p2v);
-    realT rms = p2v.size() > 1 ? std::sqrt(mx::math::vectorVariance(p2v, mean)) : 0;
-    output << "p2v " << mean << ' ' << rms << ' '
+    realT rms = vectorRms(p2v);
+    realT stddev = vectorStddev(p2v, mean);
+    output << "p2v " << mean << ' ' << rms << ' ' << stddev << ' '
            << *std::max_element(p2v.begin(), p2v.end()) << '\n';
 
     mean = mx::math::vectorMean(p2pDifference);
-    rms = p2pDifference.size() > 1 ? std::sqrt(mx::math::vectorVariance(p2pDifference, mean)) : 0;
-    output << "p2pdiff " << mean << ' ' << rms << ' '
+    rms = vectorRms(p2pDifference);
+    stddev = vectorStddev(p2pDifference, mean);
+    output << "p2pdiff " << mean << ' ' << rms << ' ' << stddev << ' '
            << *std::max_element(p2pDifference.begin(), p2pDifference.end()) << '\n';
 }
 
@@ -456,7 +498,7 @@ void writeHistogram(const std::filesystem::path & fileName,
                     realT binWidth)
 {
     std::ofstream output(fileName);
-    realT rms = std::sqrt(mx::math::vectorVariance(values, 0));
+    realT rms = vectorRms(values);
     realT maxValue = *std::max_element(values.begin(), values.end());
     mx::math::histogramUniform<realT> histogram(minimum, maximum, binWidth, values, true);
 

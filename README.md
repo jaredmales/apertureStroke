@@ -109,8 +109,9 @@ make zernikeTheory
 ```
 
 This writes `output/circle_25m/zernike_theory_circle_25m.dat`. Columns 2 and 3
-are the predicted mean absolute modal P2V and RMS about that mean, matching the
-`mean` and `rms` columns in the measured `zernike_p2v` tables. Seeing is
+are the predicted mean absolute modal P2V and true RMS, matching the `mean`
+and `rms` columns in the measured `zernike_p2v` tables. Column 4 is the
+standard deviation about the mean. Seeing is
 converted to r0 at its reference wavelength and then scaled to the configured
 phase wavelength before applying the Noll variance.
 
