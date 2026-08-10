@@ -143,7 +143,7 @@ class apertureStroke : public mx::app::application
                    "basis", "cutoffs", false, "string",
                    "Primary-mode cutoffs: single, default, or a comma-separated list.");
         config.add("fitMethod", "", "basis.fit", mx::app::argType::Required,
-                   "basis", "fit", false, "string", "Fit method: sequential, lsq, or pinv.");
+                   "basis", "fit", false, "string", "Fit method: sequential, projection, lsq, or pinv.");
         config.add("pinvAlpha", "", "basis.pinvAlpha", mx::app::argType::Required,
                    "basis", "pinvAlpha", false, "real", "Pseudo-inverse Tikhonov regularization.");
         config.add("pinvMaxCondition", "", "basis.pinvMaxCondition", mx::app::argType::Required,
@@ -348,6 +348,12 @@ class apertureStroke : public mx::app::application
 
         pss::BasisLeastSquaresFitter<realT> leastSquaresFitter;
         pss::BasisPseudoInverseFitter<realT> pseudoInverseFitter;
+        pss::BasisProjectionFitter<realT> projectionFitter;
+        if(fitType == pss::BasisFit::projection &&
+           projectionFitter.setup(combinedModes, pupil, nFitModes) < 0)
+        {
+            return -1;
+        }
         if(fitType == pss::BasisFit::leastSquares &&
            leastSquaresFitter.setup(combinedModes, pupil, nFitModes, fitModeCounts) < 0)
         {
@@ -479,14 +485,35 @@ class apertureStroke : public mx::app::application
                 return -1;
             }
 
+            std::vector<realT> projectedAmplitudes;
+            int projectedModesSubtracted = 0;
+            if(fitType == pss::BasisFit::projection &&
+               projectionFitter.project(projectedAmplitudes, residual, inputScreen) < 0)
+            {
+                return -1;
+            }
+
             for(size_t c = 0; c < statistics.size(); ++c)
             {
                 CutoffStats & stats = statistics[c];
-                residual = inputScreen;
                 std::vector<realT> amplitudes;
 
-                if(fitType == pss::BasisFit::leastSquares)
+                if(fitType == pss::BasisFit::projection)
                 {
+                    if(projectionFitter.subtractRange(residual,
+                                                      projectedAmplitudes,
+                                                      projectedModesSubtracted,
+                                                      stats.nFitModes) < 0)
+                    {
+                        return -1;
+                    }
+                    projectedModesSubtracted = stats.nFitModes;
+                    amplitudes.assign(projectedAmplitudes.begin(),
+                                      projectedAmplitudes.begin() + stats.nFitModes);
+                }
+                else if(fitType == pss::BasisFit::leastSquares)
+                {
+                    residual = inputScreen;
                     if(leastSquaresFitter.subtract(amplitudes, residual, c) < 0)
                     {
                         return -1;
@@ -494,6 +521,7 @@ class apertureStroke : public mx::app::application
                 }
                 else if(fitType == pss::BasisFit::pseudoInverse)
                 {
+                    residual = inputScreen;
                     if(pseudoInverseFitter.subtract(amplitudes, residual, c) < 0)
                     {
                         return -1;
@@ -501,6 +529,7 @@ class apertureStroke : public mx::app::application
                 }
                 else if(stats.nFitModes > 0)
                 {
+                    residual = inputScreen;
                     if(mx::sigproc::basisAmplitudes(amplitudes,
                                                     residual,
                                                     combinedModes,
@@ -515,6 +544,7 @@ class apertureStroke : public mx::app::application
                 }
                 else
                 {
+                    residual = inputScreen;
                     pss::subtractPupilMean(residual, pupil);
                 }
 

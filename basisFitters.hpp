@@ -15,6 +15,147 @@ namespace aperture_stroke
 {
 
 template<typename realT>
+class BasisProjectionFitter
+{
+  public:
+    int setup(const mx::improc::eigenCube<realT> & modes,
+              const mx::improc::eigenImage<realT> & mask,
+              int nModes)
+    {
+        m_modes = &modes;
+        m_coords.clear();
+        m_modeNorms.assign(nModes, 0);
+        m_weightSum = 0;
+
+        if(nModes < 0 || nModes > modes.planes())
+        {
+            std::cerr << "modal projection requested " << nModes
+                      << " modes but only " << modes.planes() << " are available\n";
+            return -1;
+        }
+        if(modes.rows() != mask.rows() || modes.cols() != mask.cols())
+        {
+            std::cerr << "modal projection basis and pupil dimensions do not match\n";
+            return -1;
+        }
+
+        for(int cc = 0; cc < mask.cols(); ++cc)
+        {
+            for(int rr = 0; rr < mask.rows(); ++rr)
+            {
+                if(mask(rr, cc) != 0)
+                {
+                    m_coords.push_back({rr, cc, mask(rr, cc)});
+                    m_weightSum += mask(rr, cc);
+                }
+            }
+        }
+
+        if(m_coords.empty() || m_weightSum <= 0)
+        {
+            std::cerr << "modal projection has an empty pupil\n";
+            return -1;
+        }
+
+        for(int n = 0; n < nModes; ++n)
+        {
+            double norm = 0;
+            for(const Coordinate & coord : m_coords)
+            {
+                double modeValue = modes.image(n)(coord.row, coord.col);
+                norm += coord.weight * modeValue * modeValue;
+            }
+            if(norm <= 0)
+            {
+                std::cerr << "modal projection mode " << n << " has zero norm on the pupil\n";
+                return -1;
+            }
+            m_modeNorms[n] = norm;
+        }
+
+        return 0;
+    }
+
+    int project(std::vector<realT> & amplitudes,
+                mx::improc::eigenImage<realT> & residual,
+                const mx::improc::eigenImage<realT> & image) const
+    {
+        if(m_modes == nullptr || image.rows() != m_modes->rows() || image.cols() != m_modes->cols())
+        {
+            std::cerr << "modal projection image dimensions do not match the basis\n";
+            return -1;
+        }
+
+        residual = image;
+        double mean = 0;
+        for(const Coordinate & coord : m_coords)
+        {
+            mean += coord.weight * image(coord.row, coord.col);
+        }
+        mean /= m_weightSum;
+
+        for(const Coordinate & coord : m_coords)
+        {
+            residual(coord.row, coord.col) -= static_cast<realT>(mean);
+        }
+
+        amplitudes.assign(m_modeNorms.size(), 0);
+        for(size_t n = 0; n < m_modeNorms.size(); ++n)
+        {
+            double innerProduct = 0;
+            for(const Coordinate & coord : m_coords)
+            {
+                innerProduct += coord.weight *
+                                residual(coord.row, coord.col) *
+                                m_modes->image(static_cast<int>(n))(coord.row, coord.col);
+            }
+            amplitudes[n] = static_cast<realT>(innerProduct / m_modeNorms[n]);
+        }
+
+        return 0;
+    }
+
+    int subtractRange(mx::improc::eigenImage<realT> & residual,
+                      const std::vector<realT> & amplitudes,
+                      int firstMode,
+                      int endMode) const
+    {
+        if(firstMode < 0 || endMode < firstMode ||
+           static_cast<size_t>(endMode) > amplitudes.size() ||
+           static_cast<size_t>(endMode) > m_modeNorms.size())
+        {
+            std::cerr << "invalid modal projection subtraction range ["
+                      << firstMode << ',' << endMode << ")\n";
+            return -1;
+        }
+
+        for(int n = firstMode; n < endMode; ++n)
+        {
+            for(const Coordinate & coord : m_coords)
+            {
+                residual(coord.row, coord.col) -=
+                    amplitudes[n] * m_modes->image(n)(coord.row, coord.col);
+            }
+        }
+
+        return 0;
+    }
+
+  private:
+    struct Coordinate
+    {
+        int row;
+        int col;
+        realT weight;
+    };
+
+    const mx::improc::eigenCube<realT> * m_modes {nullptr};
+    std::vector<Coordinate> m_coords;
+    std::vector<double> m_modeNorms;
+    double m_weightSum {0};
+};
+
+template<typename realT>
 class BasisLeastSquaresFitter
 {
   public:

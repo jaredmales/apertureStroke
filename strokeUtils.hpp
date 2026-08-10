@@ -55,6 +55,7 @@ int makeCircularPupil(mx::improc::eigenImage<realT> & pupil,
 enum class BasisFit
 {
     sequential,
+    projection,
     leastSquares,
     pseudoInverse
 };
@@ -64,6 +65,12 @@ inline int parseBasisFit(BasisFit & fit, const std::string & value)
     if(value == "sequential" || value == "seq")
     {
         fit = BasisFit::sequential;
+        return 0;
+    }
+
+    if(value == "projection" || value == "project" || value == "modal_projection")
+    {
+        fit = BasisFit::projection;
         return 0;
     }
 
@@ -80,7 +87,7 @@ inline int parseBasisFit(BasisFit & fit, const std::string & value)
     }
 
     std::cerr << "unknown basis fit method: " << value
-              << " (expected sequential, lsq, or pinv)\n";
+              << " (expected sequential, projection, lsq, or pinv)\n";
     return -1;
 }
 
@@ -90,6 +97,8 @@ inline std::string fitName(BasisFit fit)
     {
         case BasisFit::sequential:
             return "sequential";
+        case BasisFit::projection:
+            return "projection";
         case BasisFit::leastSquares:
             return "lsq";
         case BasisFit::pseudoInverse:

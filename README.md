@@ -37,6 +37,18 @@ targets. For example:
 --atmosphere.subharmonicLevel=4 --output.directory=output/circle_25m_sh4
 ```
 
+To test independent modal projection instead of a simultaneous least-squares
+fit, use `basis.fit=projection`. Every coefficient is measured against the
+same piston-removed input screen, and the fixed coefficients are then
+subtracted cumulatively for the requested cutoffs:
+
+```bash
+./apertureStroke -c circle_25m.conf \
+    --atmosphere.subharmonicLevel=4 \
+    --basis.fit=projection \
+    --output.directory=output/circle_25m_sh4_projection
+```
+
 The exact configured `output.directory` is created recursively. Pupil, phase,
 run-parameter, histogram, and statistics products are written beneath it.
 
