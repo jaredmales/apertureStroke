@@ -46,6 +46,8 @@ class apertureStroke : public mx::app::application
     realT outerScale {-1};
     int subharmonicLevel {1};
     bool outerSubHarmonics {true};
+    bool psdSubtractPiston {true};
+    bool psdSubtractTipTilt {false};
 
     std::string basisType {"zernike"};
     std::string basisFile;
@@ -124,6 +126,12 @@ class apertureStroke : public mx::app::application
         config.add("outerSubHarmonics", "", "atmosphere.outerSubHarmonics", mx::app::argType::Required,
                    "atmosphere", "outerSubHarmonics", false, "bool",
                    "Whether turbAtmosphere includes outer subharmonics.");
+        config.add("psdSubtractPiston", "", "atmosphere.psdSubtractPiston", mx::app::argType::Required,
+                   "atmosphere", "psdSubtractPiston", false, "bool",
+                   "Apply mxlib's piston-removal transfer function to the generated turbulence PSD.");
+        config.add("psdSubtractTipTilt", "", "atmosphere.psdSubtractTipTilt", mx::app::argType::Required,
+                   "atmosphere", "psdSubtractTipTilt", false, "bool",
+                   "Apply mxlib's tip/tilt-removal transfer function to the generated turbulence PSD.");
 
         config.add("basisType", "", "basis.type", mx::app::argType::Required,
                    "basis", "type", false, "string", "Primary basis type: zernike or file.");
@@ -189,6 +197,8 @@ class apertureStroke : public mx::app::application
         config(outerScale, "outerScale");
         config(subharmonicLevel, "subharmonicLevel");
         config(outerSubHarmonics, "outerSubHarmonics");
+        config(psdSubtractPiston, "psdSubtractPiston");
+        config(psdSubtractTipTilt, "psdSubtractTipTilt");
 
         config(basisType, "basisType");
         config(basisFile, "basisFile");
@@ -388,9 +398,19 @@ class apertureStroke : public mx::app::application
             aoSystem.atm.L_0(std::vector<realT>(aoSystem.atm.n_layers(), outerScale));
         }
 
+        realT singleLayerR0 = aoSystem.atm.r_0(seeingWavelength);
         realT effectiveSeeing = aoSystem.atm.fwhm0(seeingWavelength) *
                                 180.0 * 3600.0 / mx::math::pi<realT>();
         realT effectiveOuterScale = aoSystem.atm.L_0(0);
+        aoSystem.atm.setSingleLayer(singleLayerR0,
+                                    seeingWavelength,
+                                    effectiveOuterScale,
+                                    0,
+                                    0,
+                                    0,
+                                    0);
+        aoSystem.psd.subPiston(psdSubtractPiston);
+        aoSystem.psd.subTipTilt(psdSubtractTipTilt);
 
         mx::AO::sim::turbAtmosphere<aoSystemT, mx::verbose::d> turbulence;
         int oversizePixels = turbulenceOversize * wavefrontSize;
@@ -434,6 +454,9 @@ class apertureStroke : public mx::app::application
         atmosphereTag += std::format("_sh{}{}",
                                      subharmonicLevel,
                                      outerSubHarmonics ? "" : "_nooutersh");
+        atmosphereTag += std::format("_1layer_psdP{}_psdTT{}",
+                                     psdSubtractPiston ? 1 : 0,
+                                     psdSubtractTipTilt ? 1 : 0);
         std::string commonTag = std::format("{}trials_{}over_seeing{:.3f}arcsec_{}",
                                             nTrials,
                                             turbulenceOversize,
@@ -459,8 +482,11 @@ class apertureStroke : public mx::app::application
                   << "seeing: " << effectiveSeeing << " arcsec at " << seeingWavelength << " m"
                   << " L0: " << effectiveOuterScale
                   << " shLevel: " << subharmonicLevel
-                  << " outerSubHarmonics: " << std::boolalpha << outerSubHarmonics << std::noboolalpha << '\n'
+                  << " outerSubHarmonics: " << std::boolalpha << outerSubHarmonics
+                  << " psdSubtractPiston: " << psdSubtractPiston
+                  << " psdSubtractTipTilt: " << psdSubtractTipTilt << std::noboolalpha << '\n'
                   << "wfSz: " << turbulence.wfSz()
+                  << " layers: " << turbulence.nLayers()
                   << " oversize: " << turbulenceOversize
                   << " buffSz: " << turbulence.buffSz()
                   << " layerSz: " << wavefrontSize + 2 * oversizePixels
@@ -861,8 +887,11 @@ class apertureStroke : public mx::app::application
                << "atmosphere.seeing " << effectiveSeeing << '\n'
                << "atmosphere.seeingWavelength " << seeingWavelength << '\n'
                << "atmosphere.outerScale " << effectiveOuterScale << '\n'
+               << "atmosphere.layers 1\n"
                << "atmosphere.subharmonicLevel " << subharmonicLevel << '\n'
                << "atmosphere.outerSubHarmonics " << std::boolalpha << outerSubHarmonics << '\n'
+               << "atmosphere.psdSubtractPiston " << psdSubtractPiston << '\n'
+               << "atmosphere.psdSubtractTipTilt " << psdSubtractTipTilt << '\n'
                << "basis.type " << basisType << '\n'
                << "basis.name " << basisName << '\n'
                << "basis.primaryModes " << nModes << '\n'

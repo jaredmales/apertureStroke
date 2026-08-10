@@ -37,6 +37,20 @@ targets. For example:
 --atmosphere.subharmonicLevel=4 --output.directory=output/circle_25m_sh4
 ```
 
+Turbulence is generated with a single unit-strength layer; the LCO profile is
+used only to supply default seeing and outer scale values. The piston and
+tip/tilt PSD-removal transfer functions are controlled independently. To
+generate the unfiltered Kolmogorov PSD used by the Noll prediction, set both
+to false:
+
+```bash
+--atmosphere.psdSubtractPiston=false \
+--atmosphere.psdSubtractTipTilt=false
+```
+
+Output filenames identify these settings with the tags `1layer`, `psdP`, and
+`psdTT`.
+
 To test independent modal projection instead of a simultaneous least-squares
 fit, use `basis.fit=projection`. Every coefficient is measured against the
 same piston-removed input screen, and the fixed coefficients are then
