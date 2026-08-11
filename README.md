@@ -37,6 +37,17 @@ targets. For example:
 --atmosphere.subharmonicLevel=4 --output.directory=output/circle_25m_sh4
 ```
 
+Trials are independent and run in parallel. By default,
+`simulation.threads=0` uses OpenMP's worker limit; set an explicit value to
+bound the per-worker turbulence memory, for example:
+
+```bash
+--simulation.threads=8
+```
+
+Each worker owns a separate turbulence generator, while the basis setup is
+shared.
+
 Turbulence is generated with a single unit-strength layer; the LCO profile is
 used only to supply default seeing and outer scale values. The piston and
 tip/tilt PSD-removal transfer functions are controlled independently. To

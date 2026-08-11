@@ -1,12 +1,18 @@
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <vector>
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 #include <mx/ao/analysis/aoSystem.hpp>
 #include <mx/ao/sim/turbAtmosphere.hpp>
@@ -30,6 +36,7 @@ class apertureStroke : public mx::app::application
     using imageT = mx::improc::eigenImage<realT>;
     using cubeT = mx::improc::eigenCube<realT>;
     using aoSystemT = mx::AO::analysis::aoSystem<realT, mx::AO::analysis::vonKarmanSpectrum<realT>>;
+    using turbulenceT = mx::AO::sim::turbAtmosphere<aoSystemT, mx::verbose::d>;
 
     std::string pupilFile;
     std::string pupilName;
@@ -40,6 +47,7 @@ class apertureStroke : public mx::app::application
     realT pupilThreshold {0.5};
 
     int nTrials {10000};
+    int simulationThreads {0};
     int turbulenceOversize {3};
     realT wavelength {0.8e-6};
     realT seeingArcsec {-1};
@@ -107,6 +115,9 @@ class apertureStroke : public mx::app::application
 
         config.add("nTrials", "", "simulation.trials", mx::app::argType::Required,
                    "simulation", "trials", false, "int", "Number of independent phase screens.");
+        config.add("simulationThreads", "", "simulation.threads", mx::app::argType::Required,
+                   "simulation", "threads", false, "int",
+                   "Independent trial workers; 0 uses the OpenMP worker limit.");
         config.add("turbulenceOversize", "", "simulation.oversize", mx::app::argType::Required,
                    "simulation", "oversize", false, "int",
                    "Integer grid oversize; 1 adds one wavefront width on each side.");
@@ -194,6 +205,7 @@ class apertureStroke : public mx::app::application
         config(pupilThreshold, "pupilThreshold");
 
         config(nTrials, "nTrials");
+        config(simulationThreads, "simulationThreads");
         config(turbulenceOversize, "turbulenceOversize");
         config(wavelength, "wavelength");
         config(seeingArcsec, "seeingArcsec");
@@ -417,16 +429,49 @@ class apertureStroke : public mx::app::application
         aoSystem.psd.subPiston(psdSubtractPiston);
         aoSystem.psd.subTipTilt(psdSubtractTipTilt);
 
-        mx::AO::sim::turbAtmosphere<aoSystemT, mx::verbose::d> turbulence;
         int oversizePixels = turbulenceOversize * wavefrontSize;
-        turbulence.retain(true);
-        turbulence.forceGen(true);
-        turbulence.outerSubHarmonics(outerSubHarmonics);
-        turbulence.setup(wavefrontSize,
-                         oversizePixels,
-                         &aoSystem,
-                         static_cast<uint32_t>(subharmonicLevel));
-        turbulence.setLayers(wavefrontSize + 2 * oversizePixels);
+        int nWorkers = simulationThreads;
+#ifdef _OPENMP
+        if(nWorkers == 0)
+        {
+            nWorkers = omp_get_max_threads();
+        }
+#else
+        if(nWorkers == 0)
+        {
+            nWorkers = 1;
+        }
+        if(nWorkers > 1)
+        {
+            std::cerr << "simulation.threads requires an OpenMP build\n";
+            return -1;
+        }
+#endif
+        nWorkers = std::min(nWorkers, nTrials);
+
+        auto setupTurbulence = [&](turbulenceT & turbulence)
+        {
+            turbulence.retain(true);
+            turbulence.forceGen(true);
+            turbulence.outerSubHarmonics(outerSubHarmonics);
+            turbulence.setup(wavefrontSize,
+                             oversizePixels,
+                             &aoSystem,
+                             static_cast<uint32_t>(subharmonicLevel));
+            turbulence.setLayers(wavefrontSize + 2 * oversizePixels);
+        };
+
+        std::vector<std::unique_ptr<turbulenceT>> turbulences;
+        std::vector<std::unique_ptr<mx::improc::milkImage<realT>>> wavefronts;
+        turbulences.reserve(nWorkers);
+        wavefronts.reserve(nWorkers);
+        for(int worker = 0; worker < nWorkers; ++worker)
+        {
+            turbulences.emplace_back(std::make_unique<turbulenceT>());
+            setupTurbulence(*turbulences.back());
+            wavefronts.emplace_back(std::make_unique<mx::improc::milkImage<realT>>(
+                std::format("phase_{}", worker), wavefrontSize, wavefrontSize));
+        }
 
         std::vector<imageT> fourierModes;
         pss::FourierAmplitudeMeasurer<realT> fourierMeasurer;
@@ -482,6 +527,7 @@ class apertureStroke : public mx::app::application
                            nPrefixModes,
                            fitType,
                            gridDiameterMeters,
+                           nWorkers,
                            effectiveSeeing,
                            effectiveOuterScale,
                            cutoffs);
@@ -499,38 +545,46 @@ class apertureStroke : public mx::app::application
                   << " outerSubHarmonics: " << std::boolalpha << outerSubHarmonics
                   << " psdSubtractPiston: " << psdSubtractPiston
                   << " psdSubtractTipTilt: " << psdSubtractTipTilt << std::noboolalpha << '\n'
-                  << "wfSz: " << turbulence.wfSz()
-                  << " layers: " << turbulence.nLayers()
+                  << "wfSz: " << turbulences.front()->wfSz()
+                  << " layers: " << turbulences.front()->nLayers()
                   << " oversize: " << turbulenceOversize
-                  << " buffSz: " << turbulence.buffSz()
+                  << " buffSz: " << turbulences.front()->buffSz()
                   << " layerSz: " << wavefrontSize + 2 * oversizePixels
+                  << " workers: " << nWorkers
                   << " output: " << outputPath << '\n';
 
-        mx::improc::milkImage<realT> wavefront("phase", turbulence.wfSz(), turbulence.wfSz());
-        imageT inputScreen;
-        imageT residual;
+        imageT firstInputScreen;
+        imageT firstResidualScreen;
         realT phaseToSurfaceMicrons = wavelength * 1e6 / mx::math::two_pi<realT>() * 0.5;
         double generationSeconds = 0;
         double projectionSeconds = 0;
         double subtractionSeconds = 0;
         double metricSeconds = 0;
         double fourierSeconds = 0;
+        std::atomic<bool> trialError {false};
 
+        // Every worker owns mutable turbulence and image state; statistics are indexed by trial.
+        #pragma omp parallel for num_threads(nWorkers) schedule(static) reduction(+ : generationSeconds, projectionSeconds, subtractionSeconds, metricSeconds, fourierSeconds)
         for(int trial = 0; trial < nTrials; ++trial)
         {
+            if(trialError.load(std::memory_order_relaxed))
+            {
+                continue;
+            }
+
+            int worker = 0;
+#ifdef _OPENMP
+            worker = omp_get_thread_num();
+#endif
+            turbulenceT & turbulence = *turbulences[worker];
+            mx::improc::milkImage<realT> & wavefront = *wavefronts[worker];
+            imageT inputScreen;
+            imageT residual;
             auto stageStart = std::chrono::steady_clock::now();
             turbulence.genLayers();
             turbulence.shift(wavefront, 0.0);
             inputScreen = wavefront() * pupil;
             generationSeconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - stageStart).count();
-
-            if(trial == 0 && writePhaseScreens &&
-               writeFits(fits,
-                         outputPath / std::format("phase_input_{}_{}.fits", outputLabel, commonTag),
-                         inputScreen) < 0)
-            {
-                return -1;
-            }
 
             std::vector<realT> projectedAmplitudes;
             int projectedModesSubtracted = 0;
@@ -538,7 +592,8 @@ class apertureStroke : public mx::app::application
             if(fitType == pss::BasisFit::projection &&
                projectionFitter.project(projectedAmplitudes, residual, inputScreen) < 0)
             {
-                return -1;
+                trialError.store(true, std::memory_order_relaxed);
+                continue;
             }
             projectionSeconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - stageStart).count();
 
@@ -555,7 +610,8 @@ class apertureStroke : public mx::app::application
                                                       projectedModesSubtracted,
                                                       stats.nFitModes) < 0)
                     {
-                        return -1;
+                        trialError.store(true, std::memory_order_relaxed);
+                        break;
                     }
                     projectedModesSubtracted = stats.nFitModes;
                     amplitudes.assign(projectedAmplitudes.begin(),
@@ -566,7 +622,8 @@ class apertureStroke : public mx::app::application
                     residual = inputScreen;
                     if(leastSquaresFitter.subtract(amplitudes, residual, c) < 0)
                     {
-                        return -1;
+                        trialError.store(true, std::memory_order_relaxed);
+                        break;
                     }
                 }
                 else if(fitType == pss::BasisFit::pseudoInverse)
@@ -574,7 +631,8 @@ class apertureStroke : public mx::app::application
                     residual = inputScreen;
                     if(pseudoInverseFitter.subtract(amplitudes, residual, c) < 0)
                     {
-                        return -1;
+                        trialError.store(true, std::memory_order_relaxed);
+                        break;
                     }
                 }
                 else if(stats.nFitModes > 0)
@@ -589,7 +647,8 @@ class apertureStroke : public mx::app::application
                                                     stats.nFitModes) < 0)
                     {
                         std::cerr << "sequential basis fit failed\n";
-                        return -1;
+                        trialError.store(true, std::memory_order_relaxed);
+                        break;
                     }
                 }
                 else
@@ -618,7 +677,8 @@ class apertureStroke : public mx::app::application
                     std::vector<realT> fourierAmplitudes;
                     if(fourierMeasurer.measure(fourierAmplitudes, residual) < 0)
                     {
-                        return -1;
+                        trialError.store(true, std::memory_order_relaxed);
+                        break;
                     }
                     for(size_t n = 0; n < fourierAmplitudes.size(); ++n)
                     {
@@ -629,16 +689,34 @@ class apertureStroke : public mx::app::application
                 }
             }
 
-            if(trial == 0 && writePhaseScreens &&
-               writeFits(fits,
-                         outputPath / std::format("phase_residual_{}_{}modes_{}.fits",
-                                                  outputLabel,
-                                                  statistics.back().nModes,
-                                                  commonTag),
-                         residual) < 0)
+            if(trial == 0 && writePhaseScreens && !trialError.load(std::memory_order_relaxed))
             {
-                return -1;
+                firstInputScreen = inputScreen;
+                firstResidualScreen = residual;
             }
+        }
+
+        if(trialError.load(std::memory_order_relaxed))
+        {
+            return -1;
+        }
+
+        if(writePhaseScreens &&
+           writeFits(fits,
+                     outputPath / std::format("phase_input_{}_{}.fits", outputLabel, commonTag),
+                     firstInputScreen) < 0)
+        {
+            return -1;
+        }
+        if(writePhaseScreens &&
+           writeFits(fits,
+                     outputPath / std::format("phase_residual_{}_{}modes_{}.fits",
+                                              outputLabel,
+                                              statistics.back().nModes,
+                                              commonTag),
+                     firstResidualScreen) < 0)
+        {
+                return -1;
         }
 
         if(printTiming)
@@ -707,9 +785,9 @@ class apertureStroke : public mx::app::application
 
     int validateScalarConfig() const
     {
-        if(nTrials < 0 || turbulenceOversize < 0 || subharmonicLevel < 0)
+        if(nTrials < 0 || simulationThreads < 0 || turbulenceOversize < 0 || subharmonicLevel < 0)
         {
-            std::cerr << "trials, oversize, and subharmonic level must be non-negative\n";
+            std::cerr << "trials, threads, oversize, and subharmonic level must be non-negative\n";
             return -1;
         }
         if(pupilDiameterMeters <= 0 || wavelength <= 0 || seeingWavelength <= 0)
@@ -915,6 +993,7 @@ class apertureStroke : public mx::app::application
                             int nPrefixModes,
                             pss::BasisFit fitType,
                             realT gridDiameterMeters,
+                            int nWorkers,
                             realT effectiveSeeing,
                             realT effectiveOuterScale,
                             const std::vector<int> & cutoffs) const
@@ -931,6 +1010,8 @@ class apertureStroke : public mx::app::application
                << "simulation.gridDiameterMeters " << gridDiameterMeters << '\n'
                << "simulation.wavelength " << wavelength << '\n'
                << "simulation.trials " << nTrials << '\n'
+               << "simulation.threads " << simulationThreads << '\n'
+               << "simulation.workers " << nWorkers << '\n'
                << "simulation.oversize " << turbulenceOversize << '\n'
                << "atmosphere.seeing " << effectiveSeeing << '\n'
                << "atmosphere.seeingWavelength " << seeingWavelength << '\n'
