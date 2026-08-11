@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <format>
@@ -60,7 +61,7 @@ class apertureStroke : public mx::app::application
     realT pinvAlpha {1e-3};
     realT pinvMaxCondition {1e6};
 
-    int maxFourierM {0};
+    int maxFourierM {-1};
     realT histogramMinimum {0};
     realT histogramMaximum {10};
     realT histogramBinWidth {0.025};
@@ -70,6 +71,7 @@ class apertureStroke : public mx::app::application
     bool writePupil {true};
     bool writeBasis {false};
     bool writePhaseScreens {true};
+    bool printTiming {false};
     bool configError {false};
 
     apertureStroke()
@@ -159,7 +161,7 @@ class apertureStroke : public mx::app::application
 
         config.add("maxFourierM", "", "analysis.maxFourierM", mx::app::argType::Required,
                    "analysis", "maxFourierM", false, "int",
-                   "Maximum modified-Fourier m index; 0 uses half the pupil array size.");
+                   "Maximum modified-Fourier m index; -1 disables Fourier measurements and 0 uses half the pupil array size.");
         config.add("histogramMinimum", "", "analysis.histogramMinimum", mx::app::argType::Required,
                    "analysis", "histogramMinimum", false, "real", "Histogram minimum in microns surface.");
         config.add("histogramMaximum", "", "analysis.histogramMaximum", mx::app::argType::Required,
@@ -177,6 +179,8 @@ class apertureStroke : public mx::app::application
                    "output", "writeBasis", false, "bool", "Write the normalized combined basis as FITS.");
         config.add("writePhaseScreens", "", "output.writePhaseScreens", mx::app::argType::Required,
                    "output", "writePhaseScreens", false, "bool", "Write the first input and final residual screens.");
+        config.add("printTiming", "", "output.printTiming", mx::app::argType::Required,
+                   "output", "printTiming", false, "bool", "Print aggregate wall-clock timing by simulation stage.");
     }
 
     void loadConfig() override
@@ -221,6 +225,7 @@ class apertureStroke : public mx::app::application
         config(writePupil, "writePupil");
         config(writeBasis, "writeBasis");
         config(writePhaseScreens, "writePhaseScreens");
+        config(printTiming, "printTiming");
     }
 
     void checkConfig() override
@@ -423,15 +428,24 @@ class apertureStroke : public mx::app::application
                          static_cast<uint32_t>(subharmonicLevel));
         turbulence.setLayers(wavefrontSize + 2 * oversizePixels);
 
-        if(maxFourierM == 0)
-        {
-            maxFourierM = std::min(pupil.rows(), pupil.cols()) / 2;
-        }
-
         std::vector<imageT> fourierModes;
-        if(pss::makeP2VNormalizedFourierModes(fourierModes, pupil, maxFourierM) < 0)
+        pss::FourierAmplitudeMeasurer<realT> fourierMeasurer;
+        if(maxFourierM >= 0)
         {
-            return -1;
+            if(maxFourierM == 0)
+            {
+                maxFourierM = std::min(pupil.rows(), pupil.cols()) / 2;
+            }
+
+            if(pss::makeP2VNormalizedFourierModes(fourierModes, pupil, maxFourierM) < 0)
+            {
+                return -1;
+            }
+
+            if(fourierMeasurer.setup(fourierModes, pupil) < 0)
+            {
+                return -1;
+            }
         }
 
         std::vector<realT> basisModeP2V = pss::basisP2Vs(combinedModes, pupil);
@@ -444,7 +458,7 @@ class apertureStroke : public mx::app::application
             statistics[c].p2pDifference.resize(nTrials);
             statistics[c].modeP2V.resize(statistics[c].nFitModes,
                                          std::vector<float>(nTrials));
-            statistics[c].fourierP2V.resize(maxFourierM,
+            statistics[c].fourierP2V.resize(fourierModes.size(),
                                             std::vector<float>(nTrials));
         }
 
@@ -496,12 +510,19 @@ class apertureStroke : public mx::app::application
         imageT inputScreen;
         imageT residual;
         realT phaseToSurfaceMicrons = wavelength * 1e6 / mx::math::two_pi<realT>() * 0.5;
+        double generationSeconds = 0;
+        double projectionSeconds = 0;
+        double subtractionSeconds = 0;
+        double metricSeconds = 0;
+        double fourierSeconds = 0;
 
         for(int trial = 0; trial < nTrials; ++trial)
         {
+            auto stageStart = std::chrono::steady_clock::now();
             turbulence.genLayers();
             turbulence.shift(wavefront, 0.0);
             inputScreen = wavefront() * pupil;
+            generationSeconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - stageStart).count();
 
             if(trial == 0 && writePhaseScreens &&
                writeFits(fits,
@@ -513,17 +534,20 @@ class apertureStroke : public mx::app::application
 
             std::vector<realT> projectedAmplitudes;
             int projectedModesSubtracted = 0;
+            stageStart = std::chrono::steady_clock::now();
             if(fitType == pss::BasisFit::projection &&
                projectionFitter.project(projectedAmplitudes, residual, inputScreen) < 0)
             {
                 return -1;
             }
+            projectionSeconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - stageStart).count();
 
             for(size_t c = 0; c < statistics.size(); ++c)
             {
                 CutoffStats & stats = statistics[c];
                 std::vector<realT> amplitudes;
 
+                stageStart = std::chrono::steady_clock::now();
                 if(fitType == pss::BasisFit::projection)
                 {
                     if(projectionFitter.subtractRange(residual,
@@ -573,6 +597,7 @@ class apertureStroke : public mx::app::application
                     residual = inputScreen;
                     pss::subtractPupilMean(residual, pupil);
                 }
+                subtractionSeconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - stageStart).count();
 
                 for(size_t n = 0; n < amplitudes.size(); ++n)
                 {
@@ -582,14 +607,25 @@ class apertureStroke : public mx::app::application
                 }
 
                 residual *= pupil;
+                stageStart = std::chrono::steady_clock::now();
                 stats.p2v[trial] = pss::pupilP2V(residual, pupil) * phaseToSurfaceMicrons;
                 stats.p2pDifference[trial] = pss::maxAbsPixelDiff(residual, pupil) * phaseToSurfaceMicrons;
+                metricSeconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - stageStart).count();
 
-                for(size_t n = 0; n < fourierModes.size(); ++n)
+                if(!fourierModes.empty())
                 {
-                    stats.fourierP2V[n][trial] =
-                        pss::fourierModeP2VAmplitude(residual, fourierModes[n], pupil) *
-                        phaseToSurfaceMicrons;
+                    stageStart = std::chrono::steady_clock::now();
+                    std::vector<realT> fourierAmplitudes;
+                    if(fourierMeasurer.measure(fourierAmplitudes, residual) < 0)
+                    {
+                        return -1;
+                    }
+                    for(size_t n = 0; n < fourierAmplitudes.size(); ++n)
+                    {
+                        stats.fourierP2V[n][trial] = fourierAmplitudes[n] * phaseToSurfaceMicrons;
+                    }
+                    fourierSeconds +=
+                        std::chrono::duration<double>(std::chrono::steady_clock::now() - stageStart).count();
                 }
             }
 
@@ -603,6 +639,15 @@ class apertureStroke : public mx::app::application
             {
                 return -1;
             }
+        }
+
+        if(printTiming)
+        {
+            std::cerr << "timing s/trial: generation " << generationSeconds / nTrials
+                      << " projection " << projectionSeconds / nTrials
+                      << " subtraction " << subtractionSeconds / nTrials
+                      << " metrics " << metricSeconds / nTrials
+                      << " fourier " << fourierSeconds / nTrials << '\n';
         }
 
         for(const CutoffStats & stats : statistics)
@@ -621,8 +666,11 @@ class apertureStroke : public mx::app::application
             pss::writeResidualStats<realT>(outputPath / std::format("p2v_stats_{}_{}.dat", outputLabel, tag),
                                            stats.p2v,
                                            stats.p2pDifference);
-            pss::writeFourierStats<realT>(outputPath / std::format("fourier_p2v_{}_{}.dat", outputLabel, tag),
-                                          stats.fourierP2V);
+            if(!stats.fourierP2V.empty())
+            {
+                pss::writeFourierStats<realT>(outputPath / std::format("fourier_p2v_{}_{}.dat", outputLabel, tag),
+                                              stats.fourierP2V);
+            }
 
             if(nPrefixModes > 0)
             {
@@ -684,7 +732,7 @@ class apertureStroke : public mx::app::application
             std::cerr << "central obscuration applies only to a constructed circular pupil\n";
             return -1;
         }
-        if(maxFourierM < 0 || histogramMaximum <= histogramMinimum || histogramBinWidth <= 0)
+        if(maxFourierM < -1 || histogramMaximum <= histogramMinimum || histogramBinWidth <= 0)
         {
             std::cerr << "invalid analysis limits\n";
             return -1;

@@ -1,6 +1,7 @@
 #ifndef apertureStroke_basisFitters_hpp
 #define apertureStroke_basisFitters_hpp
 
+#include <cmath>
 #include <iostream>
 #include <utility>
 #include <vector>
@@ -153,6 +154,106 @@ class BasisProjectionFitter
     std::vector<Coordinate> m_coords;
     std::vector<double> m_modeNorms;
     double m_weightSum {0};
+};
+
+template<typename realT>
+class FourierAmplitudeMeasurer
+{
+  public:
+    int setup(const std::vector<mx::improc::eigenImage<realT>> & modes,
+              const mx::improc::eigenImage<realT> & mask)
+    {
+        m_rows = mask.rows();
+        m_cols = mask.cols();
+        m_coords.clear();
+        if(modes.empty())
+        {
+            m_basis.resize(0, 0);
+            m_modeNorms.resize(0);
+            return 0;
+        }
+
+        for(const auto & mode : modes)
+        {
+            if(mode.rows() != m_rows || mode.cols() != m_cols)
+            {
+                std::cerr << "Fourier mode and pupil dimensions do not match\n";
+                return -1;
+            }
+        }
+
+        for(int cc = 0; cc < m_cols; ++cc)
+        {
+            for(int rr = 0; rr < m_rows; ++rr)
+            {
+                if(mask(rr, cc) != 0)
+                {
+                    m_coords.push_back({rr, cc});
+                }
+            }
+        }
+
+        if(m_coords.empty())
+        {
+            std::cerr << "Fourier amplitude measurement has an empty pupil\n";
+            return -1;
+        }
+
+        m_basis.resize(static_cast<int>(m_coords.size()), static_cast<int>(modes.size()));
+        m_modeNorms.resize(static_cast<int>(modes.size()));
+        for(size_t n = 0; n < modes.size(); ++n)
+        {
+            double norm = 0;
+            for(size_t p = 0; p < m_coords.size(); ++p)
+            {
+                double modeValue = modes[n](m_coords[p].first, m_coords[p].second);
+                m_basis(static_cast<int>(p), static_cast<int>(n)) = modeValue;
+                norm += modeValue * modeValue;
+            }
+            if(norm <= 0)
+            {
+                std::cerr << "Fourier mode " << n << " has zero norm on the pupil\n";
+                return -1;
+            }
+            m_modeNorms(static_cast<int>(n)) = norm;
+        }
+
+        return 0;
+    }
+
+    int measure(std::vector<realT> & amplitudes,
+                const mx::improc::eigenImage<realT> & image) const
+    {
+        if(image.rows() != m_rows || image.cols() != m_cols)
+        {
+            std::cerr << "Fourier amplitude image dimensions do not match the pupil\n";
+            return -1;
+        }
+
+        Eigen::VectorXd pupilValues(static_cast<int>(m_coords.size()));
+        for(size_t p = 0; p < m_coords.size(); ++p)
+        {
+            pupilValues(static_cast<int>(p)) = image(m_coords[p].first, m_coords[p].second);
+        }
+
+        Eigen::VectorXd coefficients = m_basis.transpose() * pupilValues;
+        coefficients.array() /= m_modeNorms.array();
+
+        amplitudes.resize(static_cast<size_t>(coefficients.size()));
+        for(int n = 0; n < coefficients.size(); ++n)
+        {
+            amplitudes[static_cast<size_t>(n)] = static_cast<realT>(std::abs(coefficients(n)));
+        }
+
+        return 0;
+    }
+
+  private:
+    int m_rows {0};
+    int m_cols {0};
+    std::vector<std::pair<int, int>> m_coords;
+    Eigen::MatrixXd m_basis;
+    Eigen::VectorXd m_modeNorms;
 };
 
 template<typename realT>

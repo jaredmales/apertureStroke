@@ -2,7 +2,7 @@
 
 `apertureStroke` generates atmospheric phase screens, removes configured
 mode cutoffs, and measures residual P2V, nearest-neighbor pixel difference,
-mode amplitudes, and modified-Fourier amplitudes. All reported amplitudes are
+mode amplitudes, and optional modified-Fourier amplitudes. All reported amplitudes are
 microns of optical surface (`wavefront / 2`).
 
 The pupil is either a constructed circular aperture, optionally with a central
