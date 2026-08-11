@@ -19,6 +19,7 @@
 #include <mx/app/application.hpp>
 #include <mx/improc/imageMasks.hpp>
 #include <mx/improc/milkImage.hpp>
+#include <mx/ipc/ompLoopWatcher.hpp>
 #include <mx/ioutils/fits/fitsFile.hpp>
 #include <mx/math/constants.hpp>
 #include <mx/sigproc/basisUtils2D.hpp>
@@ -562,6 +563,7 @@ class apertureStroke : public mx::app::application
         double metricSeconds = 0;
         double fourierSeconds = 0;
         std::atomic<bool> trialError {false};
+        mx::ipc::ompLoopWatcher<> trialWatcher(nTrials, std::cerr);
 
         // Every worker owns mutable turbulence and image state; statistics are indexed by trial.
         #pragma omp parallel for num_threads(nWorkers) schedule(static) reduction(+ : generationSeconds, projectionSeconds, subtractionSeconds, metricSeconds, fourierSeconds)
@@ -694,12 +696,20 @@ class apertureStroke : public mx::app::application
                 firstInputScreen = inputScreen;
                 firstResidualScreen = residual;
             }
+
+            if(!trialError.load(std::memory_order_relaxed))
+            {
+                trialWatcher.incrementAndOutputStatus();
+            }
         }
 
         if(trialError.load(std::memory_order_relaxed))
         {
             return -1;
         }
+
+        trialWatcher.outputFinalStatus();
+        std::cerr << '\n';
 
         if(writePhaseScreens &&
            writeFits(fits,
