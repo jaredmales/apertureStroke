@@ -56,6 +56,7 @@ class apertureStroke : public mx::app::application
     realT outerScale {-1};
     int subharmonicLevel {1};
     bool outerSubHarmonics {true};
+    bool subharmonicPrecalc {true};
     bool psdSubtractPiston {true};
     bool psdSubtractTipTilt {false};
 
@@ -140,6 +141,9 @@ class apertureStroke : public mx::app::application
         config.add("outerSubHarmonics", "", "atmosphere.outerSubHarmonics", mx::app::argType::Required,
                    "atmosphere", "outerSubHarmonics", false, "bool",
                    "Whether turbAtmosphere includes outer subharmonics.");
+        config.add("subharmonicPrecalc", "", "atmosphere.subharmonicPrecalc", mx::app::argType::Required,
+                   "atmosphere", "subharmonicPrecalc", false, "bool",
+                   "Pre-calculate subharmonic sine/cosine modes; disabling reduces memory at a runtime cost.");
         config.add("psdSubtractPiston", "", "atmosphere.psdSubtractPiston", mx::app::argType::Required,
                    "atmosphere", "psdSubtractPiston", false, "bool",
                    "Apply mxlib's piston-removal transfer function to the generated turbulence PSD.");
@@ -214,6 +218,7 @@ class apertureStroke : public mx::app::application
         config(outerScale, "outerScale");
         config(subharmonicLevel, "subharmonicLevel");
         config(outerSubHarmonics, "outerSubHarmonics");
+        config(subharmonicPrecalc, "subharmonicPrecalc");
         config(psdSubtractPiston, "psdSubtractPiston");
         config(psdSubtractTipTilt, "psdSubtractTipTilt");
 
@@ -455,6 +460,7 @@ class apertureStroke : public mx::app::application
             turbulence.retain(true);
             turbulence.forceGen(true);
             turbulence.outerSubHarmonics(outerSubHarmonics);
+            turbulence.shPreCalc(subharmonicPrecalc);
             turbulence.setup(wavefrontSize,
                              oversizePixels,
                              &aoSystem,
@@ -544,6 +550,7 @@ class apertureStroke : public mx::app::application
                   << " L0: " << effectiveOuterScale
                   << " shLevel: " << subharmonicLevel
                   << " outerSubHarmonics: " << std::boolalpha << outerSubHarmonics
+                  << " subharmonicPrecalc: " << subharmonicPrecalc
                   << " psdSubtractPiston: " << psdSubtractPiston
                   << " psdSubtractTipTilt: " << psdSubtractTipTilt << std::noboolalpha << '\n'
                   << "wfSz: " << turbulences.front()->wfSz()
@@ -1029,6 +1036,7 @@ class apertureStroke : public mx::app::application
                << "atmosphere.layers 1\n"
                << "atmosphere.subharmonicLevel " << subharmonicLevel << '\n'
                << "atmosphere.outerSubHarmonics " << std::boolalpha << outerSubHarmonics << '\n'
+               << "atmosphere.subharmonicPrecalc " << subharmonicPrecalc << '\n'
                << "atmosphere.psdSubtractPiston " << psdSubtractPiston << '\n'
                << "atmosphere.psdSubtractTipTilt " << psdSubtractTipTilt << '\n'
                << "basis.type " << basisType << '\n'
