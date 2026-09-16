@@ -77,6 +77,81 @@ subtracted cumulatively for the requested cutoffs:
 The exact configured `output.directory` is created recursively. Pupil, phase,
 run-parameter, histogram, and statistics products are written beneath it.
 
+`output.writeBasis=true` writes the normalized input modes, while
+`output.writeOrthogonalBasis=true` additionally writes
+`basis_orthogonalized_<label>.fits`. The latter is a pupil-masked,
+pupil-orthonormal version of the full combined basis, made with stabilized
+Gram--Schmidt in basis order (prefix modes first). It is a diagnostic only and
+does not change the basis used by any fit. For a cutoff, use the first
+`prefix-mode count + cutoff` planes.
+
+Primary modes can be smoothed before they are combined with any prefix basis:
+
+```ini
+[basis]
+smoothingFwhm=5
+smoothingStart=100
+```
+
+`smoothingStart` is a zero-based primary-mode index, so this leaves the first
+100 primary modes unchanged. Each later mode is nearest-neighbor extrapolated
+past the binary pupil by the Gaussian support, filtered, and cropped back to
+the pupil before the usual RMS normalization. Prefix modes (for example GMT
+segment PTT) are not smoothed. Set `smoothingFwhm=0` to disable preprocessing.
+
+For a sampling-defined alternative, use a circular hard Fourier cutoff in
+cycles per pixel instead of Gaussian smoothing:
+
+```ini
+[basis]
+smoothingFwhm=0
+lowPassCutoff=0.2
+smoothingStart=100
+```
+
+The cutoff is radial (so `0.2` cycles/pixel corresponds to a five-pixel
+period) and retains spatial frequencies at or below the cutoff. Before the
+FFT, each mode is nearest-neighbor extrapolated by one pupil-array width in
+every direction; it is then filtered, cropped, pupil-masked, and RMS
+normalized. This moves the periodic FFT boundary away from the aperture and
+prevents a zero-valued pupil edge from creating spurious high-frequency power.
+`smoothingFwhm` and `lowPassCutoff` are mutually exclusive.
+
+For the actual `basis.fit=pinv` decomposition, set
+`output.writePinvSvdBasis=true`. This writes one cube per cutoff as
+`basis_pinv_svd_<label>_<cutoff>modes.fits`. Its planes are the pupil-domain
+left singular modes used by the pseudo-inverse, in descending singular-value
+order. Components rejected by the configured pseudo-inverse are zero planes.
+Unlike the Gram--Schmidt diagnostic, these cubes depend on each cutoff.
+
+To inspect a set of residual realizations across every requested modal cutoff,
+set the number of frames to retain per cutoff:
+
+```bash
+./apertureStroke -c exploration_gmt_25m_segmentPTT.conf \
+    --output.residualCubeFrames=100 \
+    --output.directory=output/gmagaox_stroke_exploration/gmt_25m_segmentPTT/L0inf/seeing0p79
+```
+
+This writes one cube per cutoff as
+`phase_residual_cube_<label>_<cutoff>modes_<run-tag>.fits`. Each cube contains
+the requested number of trials (or all trials when fewer were run), with one
+masked residual-phase image per plane. FITS values are phase in radians,
+matching the existing `phase_input` and `phase_residual` products. A value of
+zero, the default, disables these cubes.
+
+To find where each residual-cube frame reaches its maximum inter-actuator
+stroke, use the pupil mask from the simulation:
+
+```bash
+python3 max_interactuator_stroke.py \
+    phase_residual_cube_gmt_25m_100modes_<run-tag>.fits \
+    /home/jrmales/Source/mxWork/GMT/pupil/gmt-pupil-182x182.fits
+```
+
+The output gives zero-based `row col` coordinates for both pixels in the
+maximum-difference pair, matching `maxAbsPixelDiff` in `apertureStroke`.
+
 To prepend a saved GMT segment piston/tip/tilt cube to every Zernike cutoff,
 add the following to a GMT configuration:
 

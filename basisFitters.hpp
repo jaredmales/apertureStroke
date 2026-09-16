@@ -396,12 +396,16 @@ class BasisPseudoInverseFitter
               int nModes,
               double alpha,
               double maxCondition,
-              const std::vector<int> & fitModeCounts)
+              const std::vector<int> & fitModeCounts,
+              bool retainSvdFactors = false)
     {
         m_nModes = nModes;
         m_coords.clear();
         m_modeCounts = fitModeCounts;
         m_gramPInvs.clear();
+        m_retainSvdFactors = retainSvdFactors;
+        m_svdVTs.clear();
+        m_svdGains.clear();
 
         for(int cc = 0; cc < mask.cols(); ++cc)
         {
@@ -436,6 +440,11 @@ class BasisPseudoInverseFitter
         }
 
         m_gramPInvs.reserve(m_modeCounts.size());
+        if(m_retainSvdFactors)
+        {
+            m_svdVTs.reserve(m_modeCounts.size());
+            m_svdGains.reserve(m_modeCounts.size());
+        }
         for(int nModesFit : m_modeCounts)
         {
             if(nModesFit < 0 || nModesFit > m_nModes)
@@ -448,6 +457,11 @@ class BasisPseudoInverseFitter
             m_gramPInvs.emplace_back();
             if(nModesFit == 0)
             {
+                if(m_retainSvdFactors)
+                {
+                    m_svdVTs.emplace_back();
+                    m_svdGains.emplace_back();
+                }
                 continue;
             }
 
@@ -477,12 +491,85 @@ class BasisPseudoInverseFitter
                 return -1;
             }
 
+            if(m_retainSvdFactors)
+            {
+                // The spatial singular modes are A V.  Preserve V^T and the
+                // actual pseudo-inverse gains so that diagnostics show exactly
+                // which SVD components the fitted operator retains.
+                m_svdVTs.push_back(std::move(VT));
+                Eigen::MatrixXd gains =
+                    m_svdVTs.back().matrix() * m_gramPInvs.back().matrix() * U.matrix();
+                m_svdGains.push_back(gains.diagonal());
+            }
+
             std::cerr << "pinv Gram modes: " << nModesFit
                       << " condition: " << condition
                       << " rejected: " << nRejected
                       << " requestedMaxCondition: " << maxCondition
                       << " effectiveMaxCondition: " << effectiveMaxCondition
                       << " alpha: " << alpha << '\n';
+        }
+
+        return 0;
+    }
+
+    int svdSpatialModes(mx::improc::eigenCube<realT> & modes,
+                        size_t cutoffIndex,
+                        int rows,
+                        int cols) const
+    {
+        if(!m_retainSvdFactors || cutoffIndex >= m_modeCounts.size() ||
+           cutoffIndex >= m_svdVTs.size() || cutoffIndex >= m_svdGains.size())
+        {
+            std::cerr << "pseudo-inverse SVD factors were not retained\n";
+            return -1;
+        }
+        if(rows <= 0 || cols <= 0 || static_cast<size_t>(rows * cols) < m_coords.size())
+        {
+            std::cerr << "invalid image dimensions for pseudo-inverse SVD modes\n";
+            return -1;
+        }
+
+        int nModesFit = m_modeCounts[cutoffIndex];
+        modes.resize(rows, cols, nModesFit);
+        modes.setZero();
+        if(nModesFit == 0)
+        {
+            return 0;
+        }
+
+        const Eigen::Array<double, -1, -1> & vt = m_svdVTs[cutoffIndex];
+        const Eigen::VectorXd & gains = m_svdGains[cutoffIndex];
+        if(vt.rows() != nModesFit || vt.cols() != nModesFit || gains.size() != nModesFit)
+        {
+            std::cerr << "pseudo-inverse SVD factor dimensions are inconsistent\n";
+            return -1;
+        }
+
+        Eigen::MatrixXd spatialModes = m_basis.leftCols(nModesFit) * vt.matrix().transpose();
+        double maximumGain = gains.cwiseAbs().maxCoeff();
+        double minimumRetainedGain = maximumGain * 1e-12;
+        for(int n = 0; n < nModesFit; ++n)
+        {
+            // Zero planes identify singular components rejected by the exact
+            // pseudo-inverse used in subtract().
+            if(std::abs(gains(n)) <= minimumRetainedGain)
+            {
+                continue;
+            }
+
+            double rms = std::sqrt(spatialModes.col(n).squaredNorm() /
+                                   static_cast<double>(m_coords.size()));
+            if(rms == 0)
+            {
+                continue;
+            }
+
+            for(size_t p = 0; p < m_coords.size(); ++p)
+            {
+                modes.image(n)(m_coords[p].first, m_coords[p].second) =
+                    static_cast<realT>(spatialModes(static_cast<int>(p), n) / rms);
+            }
         }
 
         return 0;
@@ -535,6 +622,9 @@ class BasisPseudoInverseFitter
     std::vector<std::pair<int, int>> m_coords;
     Eigen::MatrixXd m_basis;
     std::vector<Eigen::Array<double, -1, -1>> m_gramPInvs;
+    bool m_retainSvdFactors {false};
+    std::vector<Eigen::Array<double, -1, -1>> m_svdVTs;
+    std::vector<Eigen::VectorXd> m_svdGains;
 };
 
 } // namespace aperture_stroke

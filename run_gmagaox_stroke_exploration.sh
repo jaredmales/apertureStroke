@@ -118,13 +118,13 @@ for seeing in "${seeings[@]}"; do
     run_theory exploration_circle_6p5m.conf circle_6p5m 100 "$seeing"
 done
 
-run_case exploration_circle_25m.conf circle_25m circle_25m \
+run_case exploration_circle_25m.conf circle_25m_fwhm12p5 circle_25m_fwhm12p5 \
     "0,20,100,200,300,400,500,600,700,800,900,1000" 1000
 run_case exploration_circle_6p5m.conf circle_6p5m circle_6p5m \
     "0,20,40,60,80,100" 100
 run_case exploration_magaox_6p5m.conf magaox_6p5m magaox_6p5m \
     "0,20,40,60,80,100" 100
-run_case exploration_gmt_25m.conf gmt_25m gmt_25m \
+run_case exploration_gmt_25m.conf gmt_25m_fwhm12p5 gmt_25m_fwhm12p5 \
     "0,20,100,200,300,400,500,600,700,800,900,1000" 1000
-run_case exploration_gmt_25m_segmentPTT.conf gmt_25m_segmentPTT gmt_25m \
+run_case exploration_gmt_25m_segmentPTT.conf gmt_25m_segmentPTT_fwhm12p5 gmt_25m_fwhm12p5 \
     "0,20,100,200,300,400,500,600,700,800,900,1000" 1000 "$segment_modes"

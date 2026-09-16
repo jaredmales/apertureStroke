@@ -2,6 +2,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <complex>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -18,11 +19,15 @@
 #include <mx/ao/sim/turbAtmosphere.hpp>
 #include <mx/app/application.hpp>
 #include <mx/improc/imageMasks.hpp>
+#include <mx/improc/imageFilters.hpp>
+#include <mx/improc/imagePads.hpp>
 #include <mx/improc/milkImage.hpp>
 #include <mx/ipc/ompLoopWatcher.hpp>
 #include <mx/ioutils/fits/fitsFile.hpp>
 #include <mx/math/constants.hpp>
+#include <mx/math/ft/fftT.hpp>
 #include <mx/sigproc/basisUtils2D.hpp>
+#include <mx/sigproc/gramSchmidt.hpp>
 
 #include "basisFitters.hpp"
 #include "strokeUtils.hpp"
@@ -70,6 +75,9 @@ class apertureStroke : public mx::app::application
     std::string fitMethod {"pinv"};
     realT pinvAlpha {1e-3};
     realT pinvMaxCondition {1e6};
+    realT basisSmoothingFwhm {0};
+    realT basisLowPassCutoff {0};
+    int basisSmoothingStart {100};
 
     int maxFourierM {-1};
     realT histogramMinimum {0};
@@ -80,7 +88,10 @@ class apertureStroke : public mx::app::application
     std::string outputLabel;
     bool writePupil {true};
     bool writeBasis {false};
+    bool writeOrthogonalBasis {false};
+    bool writePinvSvdBasis {false};
     bool writePhaseScreens {true};
+    int residualCubeFrames {0};
     bool printTiming {false};
     bool configError {false};
 
@@ -174,6 +185,15 @@ class apertureStroke : public mx::app::application
                    "basis", "pinvAlpha", false, "real", "Pseudo-inverse Tikhonov regularization.");
         config.add("pinvMaxCondition", "", "basis.pinvMaxCondition", mx::app::argType::Required,
                    "basis", "pinvMaxCondition", false, "real", "Pseudo-inverse maximum condition number.");
+        config.add("basisSmoothingFwhm", "", "basis.smoothingFwhm", mx::app::argType::Required,
+                   "basis", "smoothingFwhm", false, "real",
+                   "Gaussian FWHM in pixels for smoothing primary modes; 0 disables smoothing.");
+        config.add("basisSmoothingStart", "", "basis.smoothingStart", mx::app::argType::Required,
+                   "basis", "smoothingStart", false, "int",
+                   "Zero-based primary-mode index at which Gaussian smoothing begins.");
+        config.add("basisLowPassCutoff", "", "basis.lowPassCutoff", mx::app::argType::Required,
+                   "basis", "lowPassCutoff", false, "real",
+                   "Circular hard low-pass cutoff in cycles per pixel for primary modes; 0 disables low-pass filtering.");
 
         config.add("maxFourierM", "", "analysis.maxFourierM", mx::app::argType::Required,
                    "analysis", "maxFourierM", false, "int",
@@ -193,8 +213,17 @@ class apertureStroke : public mx::app::application
                    "output", "writePupil", false, "bool", "Write the binary pupil as FITS.");
         config.add("writeBasis", "", "output.writeBasis", mx::app::argType::Required,
                    "output", "writeBasis", false, "bool", "Write the normalized combined basis as FITS.");
+        config.add("writeOrthogonalBasis", "", "output.writeOrthogonalBasis", mx::app::argType::Required,
+                   "output", "writeOrthogonalBasis", false, "bool",
+                   "Write the pupil-orthonormalized combined basis as a FITS cube for diagnostics.");
+        config.add("writePinvSvdBasis", "", "output.writePinvSvdBasis", mx::app::argType::Required,
+                   "output", "writePinvSvdBasis", false, "bool",
+                   "Write one pupil-orthonormal SVD basis cube per pseudo-inverse cutoff.");
         config.add("writePhaseScreens", "", "output.writePhaseScreens", mx::app::argType::Required,
                    "output", "writePhaseScreens", false, "bool", "Write the first input and final residual screens.");
+        config.add("residualCubeFrames", "", "output.residualCubeFrames", mx::app::argType::Required,
+                   "output", "residualCubeFrames", false, "int",
+                   "Number of residual-phase frames to save at every mode cutoff; 0 disables residual cubes.");
         config.add("printTiming", "", "output.printTiming", mx::app::argType::Required,
                    "output", "printTiming", false, "bool", "Print aggregate wall-clock timing by simulation stage.");
     }
@@ -232,6 +261,9 @@ class apertureStroke : public mx::app::application
         config(fitMethod, "fitMethod");
         config(pinvAlpha, "pinvAlpha");
         config(pinvMaxCondition, "pinvMaxCondition");
+        config(basisSmoothingFwhm, "basisSmoothingFwhm");
+        config(basisSmoothingStart, "basisSmoothingStart");
+        config(basisLowPassCutoff, "basisLowPassCutoff");
 
         config(maxFourierM, "maxFourierM");
         config(histogramMinimum, "histogramMinimum");
@@ -242,7 +274,10 @@ class apertureStroke : public mx::app::application
         config(outputLabel, "outputLabel");
         config(writePupil, "writePupil");
         config(writeBasis, "writeBasis");
+        config(writeOrthogonalBasis, "writeOrthogonalBasis");
+        config(writePinvSvdBasis, "writePinvSvdBasis");
         config(writePhaseScreens, "writePhaseScreens");
+        config(residualCubeFrames, "residualCubeFrames");
         config(printTiming, "printTiming");
     }
 
@@ -331,6 +366,10 @@ class apertureStroke : public mx::app::application
         {
             return -1;
         }
+        if(filterPrimaryModes(primaryModes, pupil) < 0)
+        {
+            return -1;
+        }
 
         cubeT prefixModes;
         if(!prefixFile.empty() && readCube(prefixModes, prefixFile, pupil, fits) < 0)
@@ -367,7 +406,34 @@ class apertureStroke : public mx::app::application
             return -1;
         }
 
-        if(nTrials == 0)
+        if(writeOrthogonalBasis && nFitModes > 0)
+        {
+            // Orthogonalization must be performed on the actual pupil.  Zeroing
+            // outside the pupil also makes the diagnostic cube unambiguous there.
+            cubeT pupilModes = combinedModes;
+            for(int n = 0; n < nFitModes; ++n)
+            {
+                pupilModes.image(n) *= pupil;
+            }
+
+            cubeT orthogonalModes;
+            Eigen::Array<realT, Eigen::Dynamic, Eigen::Dynamic> spectrum;
+            orthogonalModes.resize(pupil.rows(), pupil.cols(), nFitModes);
+            Eigen::Map<Eigen::Array<realT, Eigen::Dynamic, Eigen::Dynamic>> orthogonalVectors(
+                orthogonalModes.data(), orthogonalModes.rows() * orthogonalModes.cols(), nFitModes);
+            mx::sigproc::gramSchmidtSpectrum<0>(orthogonalVectors,
+                                                 spectrum,
+                                                 pupilModes.asVectors(),
+                                                 pupil.sum());
+            if(writeFits(fits,
+                         outputPath / std::format("basis_orthogonalized_{}.fits", outputLabel),
+                         orthogonalModes) < 0)
+            {
+                return -1;
+            }
+        }
+
+        if(nTrials == 0 && !writePinvSvdBasis)
         {
             std::cerr << "nTrials = 0; wrote setup products only to " << outputPath << '\n';
             return 0;
@@ -376,6 +442,11 @@ class apertureStroke : public mx::app::application
         pss::BasisFit fitType;
         if(pss::parseBasisFit(fitType, fitMethod) < 0)
         {
+            return -1;
+        }
+        if(writePinvSvdBasis && fitType != pss::BasisFit::pseudoInverse)
+        {
+            std::cerr << "output.writePinvSvdBasis requires basis.fit=pinv\n";
             return -1;
         }
 
@@ -398,9 +469,40 @@ class apertureStroke : public mx::app::application
                                      nFitModes,
                                      pinvAlpha,
                                      pinvMaxCondition,
-                                     fitModeCounts) < 0)
+                                     fitModeCounts,
+                                     writePinvSvdBasis) < 0)
         {
             return -1;
+        }
+
+        if(writePinvSvdBasis)
+        {
+            for(size_t c = 0; c < fitModeCounts.size(); ++c)
+            {
+                // A no-mode cutoff has no SVD basis and cannot be represented
+                // as a nonempty FITS cube.
+                if(fitModeCounts[c] == 0)
+                {
+                    continue;
+                }
+
+                cubeT svdModes;
+                if(pseudoInverseFitter.svdSpatialModes(svdModes, c, pupil.rows(), pupil.cols()) < 0 ||
+                   writeFits(fits,
+                             outputPath / std::format("basis_pinv_svd_{}_{}modes.fits",
+                                                      outputLabel,
+                                                      cutoffs[c]),
+                             svdModes) < 0)
+                {
+                    return -1;
+                }
+            }
+        }
+
+        if(nTrials == 0)
+        {
+            std::cerr << "nTrials = 0; wrote setup products only to " << outputPath << '\n';
+            return 0;
         }
 
         aoSystemT aoSystem;
@@ -563,6 +665,16 @@ class apertureStroke : public mx::app::application
 
         imageT firstInputScreen;
         imageT firstResidualScreen;
+        int nResidualCubeFrames = std::min(nTrials, residualCubeFrames);
+        std::vector<cubeT> residualCubes;
+        if(nResidualCubeFrames > 0)
+        {
+            residualCubes.reserve(cutoffs.size());
+            for(size_t c = 0; c < cutoffs.size(); ++c)
+            {
+                residualCubes.emplace_back(pupil.rows(), pupil.cols(), nResidualCubeFrames);
+            }
+        }
         realT phaseToSurfaceMicrons = wavelength * 1e6 / mx::math::two_pi<realT>() * 0.5;
         double generationSeconds = 0;
         double projectionSeconds = 0;
@@ -675,6 +787,10 @@ class apertureStroke : public mx::app::application
                 }
 
                 residual *= pupil;
+                if(trial < nResidualCubeFrames)
+                {
+                    residualCubes[c].image(trial) = residual;
+                }
                 stageStart = std::chrono::steady_clock::now();
                 stats.p2v[trial] = pss::pupilP2V(residual, pupil) * phaseToSurfaceMicrons;
                 stats.p2pDifference[trial] = pss::maxAbsPixelDiff(residual, pupil) * phaseToSurfaceMicrons;
@@ -734,6 +850,18 @@ class apertureStroke : public mx::app::application
                      firstResidualScreen) < 0)
         {
                 return -1;
+        }
+        for(size_t c = 0; c < residualCubes.size(); ++c)
+        {
+            if(writeFits(fits,
+                         outputPath / std::format("phase_residual_cube_{}_{}modes_{}.fits",
+                                                  outputLabel,
+                                                  statistics[c].nModes,
+                                                  commonTag),
+                         residualCubes[c]) < 0)
+            {
+                return -1;
+            }
         }
 
         if(printTiming)
@@ -802,9 +930,10 @@ class apertureStroke : public mx::app::application
 
     int validateScalarConfig() const
     {
-        if(nTrials < 0 || simulationThreads < 0 || turbulenceOversize < 0 || subharmonicLevel < 0)
+        if(nTrials < 0 || simulationThreads < 0 || turbulenceOversize < 0 || subharmonicLevel < 0 ||
+           residualCubeFrames < 0)
         {
-            std::cerr << "trials, threads, oversize, and subharmonic level must be non-negative\n";
+            std::cerr << "trials, threads, oversize, subharmonic level, and residual cube frames must be non-negative\n";
             return -1;
         }
         if(pupilDiameterMeters <= 0 || wavelength <= 0 || seeingWavelength <= 0)
@@ -827,9 +956,16 @@ class apertureStroke : public mx::app::application
             std::cerr << "central obscuration applies only to a constructed circular pupil\n";
             return -1;
         }
-        if(maxFourierM < -1 || histogramMaximum <= histogramMinimum || histogramBinWidth <= 0)
+        if(maxFourierM < -1 || histogramMaximum <= histogramMinimum || histogramBinWidth <= 0 ||
+           basisSmoothingFwhm < 0 || basisLowPassCutoff < 0 || basisLowPassCutoff > 0.5 ||
+           basisSmoothingStart < 0)
         {
             std::cerr << "invalid analysis limits\n";
+            return -1;
+        }
+        if(basisSmoothingFwhm > 0 && basisLowPassCutoff > 0)
+        {
+            std::cerr << "Gaussian smoothing and hard low-pass filtering are mutually exclusive\n";
             return -1;
         }
         return 0;
@@ -955,6 +1091,138 @@ class apertureStroke : public mx::app::application
         return -1;
     }
 
+    int filterPrimaryModes(cubeT & modes, const imageT & pupil) const
+    {
+        if((basisSmoothingFwhm == 0 && basisLowPassCutoff == 0) || basisSmoothingStart >= modes.planes())
+        {
+            return 0;
+        }
+
+        if(basisLowPassCutoff > 0)
+        {
+            return lowPassPrimaryModes(modes, pupil);
+        }
+
+        return smoothPrimaryModes(modes, pupil);
+    }
+
+    int smoothPrimaryModes(cubeT & modes, const imageT & pupil) const
+    {
+
+        using kernelT = mx::improc::gaussKernel<imageT>;
+        kernelT kernel(basisSmoothingFwhm);
+        int pad = (kernel.kernel.rows() - 1) / 2;
+        if(pad <= 0)
+        {
+            return 0;
+        }
+
+        // Extrapolate outward before filtering so each in-pupil edge pixel is
+        // evaluated with a complete, normalized Gaussian kernel rather than a
+        // zero-padded pupil edge.
+        imageT paddedPupil;
+        if(mx::improc::padImage(paddedPupil, pupil, pad, static_cast<realT>(0)) != 0)
+        {
+            std::cerr << "could not pad pupil for basis smoothing\n";
+            return -1;
+        }
+
+        std::cerr << "smoothing primary basis modes " << basisSmoothingStart << '-' << modes.planes() - 1
+                  << " with Gaussian FWHM " << basisSmoothingFwhm << " pixels\n";
+        for(int n = basisSmoothingStart; n < modes.planes(); ++n)
+        {
+            imageT input = modes.image(n);
+            imageT extrapolated;
+            imageT smoothed;
+            if(mx::improc::padImage(extrapolated, input, paddedPupil, pad) != 0 ||
+               mx::improc::filterImage(smoothed, extrapolated, kernel) != mx::error_t::noerror)
+            {
+                std::cerr << "could not smooth primary basis mode " << n << '\n';
+                return -1;
+            }
+
+            modes.image(n) = smoothed.block(pad, pad, pupil.rows(), pupil.cols()) * pupil;
+        }
+
+        return 0;
+    }
+
+    int lowPassPrimaryModes(cubeT & modes, const imageT & pupil) const
+    {
+        // Pad by a full pupil array width before the FFT.  The masked padImage
+        // overload extends each in-pupil value outward to its nearest pupil
+        // neighbor, avoiding a false zero-valued aperture edge.  This also
+        // moves the periodic FFT boundary a full aperture away from the crop.
+        int pad = std::max(pupil.rows(), pupil.cols());
+        imageT paddedPupil;
+        if(mx::improc::padImage(paddedPupil, pupil, pad, static_cast<realT>(0)) != 0)
+        {
+            std::cerr << "could not pad pupil for basis low-pass filtering\n";
+            return -1;
+        }
+
+        using complexT = std::complex<realT>;
+        using complexImageT = mx::improc::eigenImage<complexT>;
+        mx::math::ft::fftT<complexT, complexT, 2, 0> forward;
+        mx::math::ft::fftT<complexT, complexT, 2, 0> backward;
+        forward.plan(paddedPupil.rows(), paddedPupil.cols(), mx::math::ft::dir::forward, true);
+        backward.plan(paddedPupil.rows(), paddedPupil.cols(), mx::math::ft::dir::backward, true);
+
+        std::vector<char> passband(static_cast<size_t>(paddedPupil.size()), 0);
+        for(int r = 0; r < paddedPupil.rows(); ++r)
+        {
+            int kr = r <= paddedPupil.rows() / 2 ? r : r - paddedPupil.rows();
+            realT fr = static_cast<realT>(kr) / paddedPupil.rows();
+            for(int c = 0; c < paddedPupil.cols(); ++c)
+            {
+                int kc = c <= paddedPupil.cols() / 2 ? c : c - paddedPupil.cols();
+                realT fc = static_cast<realT>(kc) / paddedPupil.cols();
+                if(std::hypot(fr, fc) <= basisLowPassCutoff)
+                {
+                    passband[static_cast<size_t>(r) + static_cast<size_t>(paddedPupil.rows()) * c] = 1;
+                }
+            }
+        }
+
+        std::cerr << "low-pass filtering primary basis modes " << basisSmoothingStart << '-'
+                  << modes.planes() - 1 << " at " << basisLowPassCutoff << " cycles/pixel\n";
+        realT normalization = static_cast<realT>(paddedPupil.size());
+        for(int n = basisSmoothingStart; n < modes.planes(); ++n)
+        {
+            imageT input = modes.image(n);
+            imageT extrapolated;
+            complexImageT transformed;
+            if(mx::improc::padImage(extrapolated, input, paddedPupil, pad) != 0)
+            {
+                std::cerr << "could not extrapolate primary basis mode " << n << " for low-pass filtering\n";
+                return -1;
+            }
+
+            transformed.resize(extrapolated.rows(), extrapolated.cols());
+            for(int c = 0; c < extrapolated.cols(); ++c)
+            {
+                for(int r = 0; r < extrapolated.rows(); ++r)
+                {
+                    transformed(r, c) = complexT(extrapolated(r, c), 0);
+                }
+            }
+            forward(transformed.data(), transformed.data());
+            for(int idx = 0; idx < transformed.size(); ++idx)
+            {
+                if(!passband[static_cast<size_t>(idx)])
+                {
+                    transformed(idx) = 0;
+                }
+            }
+            backward(transformed.data(), transformed.data());
+
+            imageT filtered = transformed.real() / normalization;
+            modes.image(n) = filtered.block(pad, pad, pupil.rows(), pupil.cols()) * pupil;
+        }
+
+        return 0;
+    }
+
     int readCube(cubeT & cube,
                  const std::string & path,
                  const imageT & pupil,
@@ -1043,6 +1311,9 @@ class apertureStroke : public mx::app::application
                << "basis.name " << basisName << '\n'
                << "basis.primaryModes " << nModes << '\n'
                << "basis.prefixModes " << nPrefixModes << '\n'
+               << "basis.smoothingFwhm " << basisSmoothingFwhm << '\n'
+               << "basis.smoothingStart " << basisSmoothingStart << '\n'
+               << "basis.lowPassCutoff " << basisLowPassCutoff << '\n'
                << "basis.fit " << pss::fitName(fitType) << '\n'
                << "basis.pinvAlpha " << pinvAlpha << '\n'
                << "basis.pinvMaxCondition " << pinvMaxCondition << '\n'
