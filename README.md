@@ -135,6 +135,13 @@ primary basis has nine Zernikes (Noll 2--10) and 960 Fourier modes, for 969
 planes. The actual count is written as `basis.primaryModes` in the run
 metadata; `basis.cutoffs=default` includes the final generated count.
 
+`run_gmagaox_stroke_exploration_hybrid.sh` runs the corresponding full
+comparison under `output/gmagaox_stroke_exploration_hybrid` by default. Its
+hybrid cutoffs double the rectangular Fourier linear DOF (`1,2,4,8,16,32`),
+which gives primary-mode cutoffs `0,9,17,33,89,297,1097` for Zernikes Noll
+2--10 followed by the Fourier sequence. The 6.5 m reference cases remain
+Zernike bases and use `0,5,10,20,40,60,80,100` cutoffs.
+
 For the actual `basis.fit=pinv` decomposition, set
 `output.writePinvSvdBasis=true`. This writes one cube per cutoff as
 `basis_pinv_svd_<label>_<cutoff>modes.fits`. Its planes are the pupil-domain
