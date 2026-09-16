@@ -97,10 +97,10 @@ than only by the larger GMT sampled area.
 `run_gmagaox_stroke_exploration_hybrid.sh` is a separate full exploration
 script. It writes below `output/gmagaox_stroke_exploration_hybrid` and leaves
 the prior FWHM 12.5 sweep untouched. The 25.4 m circular, GMT, and GMT
-segment-PTT cases use a hybrid Fourier cutoff of 32. The script doubles the
-linear rectangular Fourier DOF (`1,2,4,8,16,32`), producing primary cutoffs
-`0,9,17,33,89,297,1097`: zero primary modes, then nine low Zernikes plus the
-complete Fourier sequences at each linear cutoff. The final case contains
+segment-PTT cases use a hybrid Fourier cutoff of 32. The script retains the
+Zernike-only control and increases linear rectangular Fourier DOF by 2 from
+8 through 32, producing primary cutoffs
+`0,9,89,129,177,233,297,369,449,537,633,737,849,969,1097`. The final case contains
 1,097 primary modes (1,118 modes including the segment-PTT prefix).
 
 The 6.5 m circular and MagAO-X references remain ordinary Zernike bases but

@@ -15,11 +15,12 @@ seeings=(0.5 0.64 0.79)
 outer_scales=(25 50 100 1000 0)
 
 # These primary-mode cutoffs are the nine low Zernikes plus the rectangular
-# modified-Fourier sequence. For each linear DOF N, mxlib uses
+# modified-Fourier sequence. Start the Fourier sweep at linear DOF 8, then
+# increase it by 2. For each linear DOF N, mxlib uses
 # 4*floor(N/2)*(floor(N/2)+1) Fourier planes.
-hybrid_linear_dofs=(1 2 4 8 16 32)
+hybrid_linear_dofs=(8 10 12 14 16 18 20 22 24 26 28 30 32)
 hybrid_zernikes=9
-hybrid_cutoff_values=(0)
+hybrid_cutoff_values=(0 "$hybrid_zernikes")
 for linear_dof in "${hybrid_linear_dofs[@]}"; do
     half_dof=$((linear_dof / 2))
     fourier_modes=$((4 * half_dof * (half_dof + 1)))
@@ -128,7 +129,7 @@ run_case()
     done
 }
 
-echo "Hybrid primary cutoffs (linear DOF ${hybrid_linear_dofs[*]}): $hybrid_cutoffs"
+echo "Hybrid primary cutoffs (Z-only plus linear DOF ${hybrid_linear_dofs[*]}): $hybrid_cutoffs"
 
 # The 6.5 m references remain Zernike bases. Their theory is generated here
 # because it remains directly applicable to those runs.

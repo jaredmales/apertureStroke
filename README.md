@@ -137,8 +137,9 @@ metadata; `basis.cutoffs=default` includes the final generated count.
 
 `run_gmagaox_stroke_exploration_hybrid.sh` runs the corresponding full
 comparison under `output/gmagaox_stroke_exploration_hybrid` by default. Its
-hybrid cutoffs double the rectangular Fourier linear DOF (`1,2,4,8,16,32`),
-which gives primary-mode cutoffs `0,9,17,33,89,297,1097` for Zernikes Noll
+hybrid cutoffs retain the Zernike-only control, then increase the rectangular
+Fourier linear DOF by 2 from `8` through `32`. This gives primary-mode cutoffs
+`0,9,89,129,177,233,297,369,449,537,633,737,849,969,1097` for Zernikes Noll
 2--10 followed by the Fourier sequence. The 6.5 m reference cases remain
 Zernike bases and use `0,5,10,20,40,60,80,100` cutoffs.
 
