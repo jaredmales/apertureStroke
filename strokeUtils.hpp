@@ -334,14 +334,17 @@ int makeZernikeBasis(mx::improc::eigenCube<realT> & modes,
                      int nModes,
                      int rows,
                      int cols,
-                     realT radiusPixels)
+                     realT radiusPixels,
+                     int minNollIndex = 2)
 {
     modes.resize(rows, cols, nModes);
     if(nModes == 0)
     {
         return 0;
     }
-    return mx::sigproc::zernikeBasis<mx::improc::eigenCube<realT>, double>(modes, radiusPixels);
+    return mx::sigproc::zernikeBasis<mx::improc::eigenCube<realT>, double>(modes,
+                                                                             radiusPixels,
+                                                                             minNollIndex);
 }
 
 template<typename realT>

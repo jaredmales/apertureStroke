@@ -117,6 +117,24 @@ normalized. This moves the periodic FFT boundary away from the aperture and
 prevents a zero-valued pupil edge from creating spurious high-frequency power.
 `smoothingFwhm` and `lowPassCutoff` are mutually exclusive.
 
+For a hybrid primary basis, select an inclusive Noll-Zernike range followed by
+mxlib's rectangular modified-Fourier sequence:
+
+```ini
+[basis]
+type=hybrid
+hybridZernikeMin=2
+hybridZernikeMax=10
+hybridFourierN=30
+```
+
+The Fourier portion uses `mx::sigproc::makeFourierModeFreqs_Rect` followed by
+`makeModifiedFourierMode`, so its plane count is determined by the rectangular
+frequency cutoff, not by `basis.modes`. With `hybridFourierN=30`, the hybrid
+primary basis has nine Zernikes (Noll 2--10) and 960 Fourier modes, for 969
+planes. The actual count is written as `basis.primaryModes` in the run
+metadata; `basis.cutoffs=default` includes the final generated count.
+
 For the actual `basis.fit=pinv` decomposition, set
 `output.writePinvSvdBasis=true`. This writes one cube per cutoff as
 `basis_pinv_svd_<label>_<cutoff>modes.fits`. Its planes are the pupil-domain

@@ -67,6 +67,31 @@ nearest-neighbor extension before the FFT, gave 0.362568 um mean and 0.934866
 um maximum P2P at 1000 modes. Its sharp transition was inferior to the
 Gaussian rolloff, consistent with edge ringing.
 
+## Hybrid Zernike--Fourier basis
+
+The next basis replaces the high-order Zernikes with mxlib's rectangular
+modified-Fourier sequence. It retains the segment PTT prefix and uses primary
+Zernikes Noll 2--10 (tip/tilt through Noll 10), followed by the full sequence
+from `mx::sigproc::makeFourierModeFreqs_Rect(30)`. This produces nine Zernikes
+and 960 Fourier modes: 969 primary modes, or 990 modes including the 21
+segment-PTT prefix modes. The terminal cutoff is therefore 969, not 1000.
+
+No Gaussian or hard Fourier filter is applied to this hybrid basis. The
+combined diagnostic basis is written to
+`output/gmagaox_stroke_exploration/gmt_25m_segmentPTT_hybrid_z2to10_fourierRectN30/`.
+
+| 10,000-screen comparison | Mean P2P (um) | Standard deviation (um) | Maximum P2P (um) |
+| --- | ---: | ---: | ---: |
+| FWHM 12.5 Zernike, 1000 primary modes | 0.336349 | 0.038375 | 0.624999 |
+| **Hybrid, 969 primary modes** | **0.291286** | **0.024938** | **0.469965** |
+| MagAO-X 6.5 m, 60 modes | 0.264785 | 0.029632 | 0.443668 |
+
+Relative to the FWHM 12.5 Zernike result, the hybrid basis reduces mean P2P
+by 13.4% and the observed maximum by 24.8%. It is within 10% in mean and 6%
+in maximum of the matched 6.5 m/60-mode result. This strongly supports the
+remaining tail being driven by the high-order Zernike edge behavior rather
+than only by the larger GMT sampled area.
+
 ## Matched 6.5 m comparison
 
 The approximate characteristic modal scales are

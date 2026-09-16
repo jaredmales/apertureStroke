@@ -27,6 +27,7 @@
 #include <mx/math/constants.hpp>
 #include <mx/math/ft/fftT.hpp>
 #include <mx/sigproc/basisUtils2D.hpp>
+#include <mx/sigproc/fourierModes.hpp>
 #include <mx/sigproc/gramSchmidt.hpp>
 
 #include "basisFitters.hpp"
@@ -78,6 +79,9 @@ class apertureStroke : public mx::app::application
     realT basisSmoothingFwhm {0};
     realT basisLowPassCutoff {0};
     int basisSmoothingStart {100};
+    int hybridZernikeMin {2};
+    int hybridZernikeMax {10};
+    int hybridFourierN {30};
 
     int maxFourierM {-1};
     realT histogramMinimum {0};
@@ -175,7 +179,7 @@ class apertureStroke : public mx::app::application
                    "basis", "prefixName", false, "string", "Prefix basis name used in output filenames.");
         config.add("nModes", "", "basis.modes", mx::app::argType::Required,
                    "basis", "modes", false, "int",
-                   "Number of primary modes; negative means 1000 Zernikes or all modes from a FITS cube.");
+                   "Number of primary modes; negative means 1000 Zernikes or all modes from a FITS cube; ignored by hybrid.");
         config.add("modeCutoffs", "", "basis.cutoffs", mx::app::argType::Required,
                    "basis", "cutoffs", false, "string",
                    "Primary-mode cutoffs: single, default, or a comma-separated list.");
@@ -194,6 +198,15 @@ class apertureStroke : public mx::app::application
         config.add("basisLowPassCutoff", "", "basis.lowPassCutoff", mx::app::argType::Required,
                    "basis", "lowPassCutoff", false, "real",
                    "Circular hard low-pass cutoff in cycles per pixel for primary modes; 0 disables low-pass filtering.");
+        config.add("hybridZernikeMin", "", "basis.hybridZernikeMin", mx::app::argType::Required,
+                   "basis", "hybridZernikeMin", false, "int",
+                   "First Noll Zernike index in the hybrid basis (inclusive). Used only by basis.type=hybrid.");
+        config.add("hybridZernikeMax", "", "basis.hybridZernikeMax", mx::app::argType::Required,
+                   "basis", "hybridZernikeMax", false, "int",
+                   "Last Noll Zernike index in the hybrid basis (inclusive). Used only by basis.type=hybrid.");
+        config.add("hybridFourierN", "", "basis.hybridFourierN", mx::app::argType::Required,
+                   "basis", "hybridFourierN", false, "int",
+                   "Linear cutoff passed to makeFourierModeFreqs_Rect for basis.type=hybrid.");
 
         config.add("maxFourierM", "", "analysis.maxFourierM", mx::app::argType::Required,
                    "analysis", "maxFourierM", false, "int",
@@ -264,6 +277,9 @@ class apertureStroke : public mx::app::application
         config(basisSmoothingFwhm, "basisSmoothingFwhm");
         config(basisSmoothingStart, "basisSmoothingStart");
         config(basisLowPassCutoff, "basisLowPassCutoff");
+        config(hybridZernikeMin, "hybridZernikeMin");
+        config(hybridZernikeMax, "hybridZernikeMax");
+        config(hybridFourierN, "hybridFourierN");
 
         config(maxFourierM, "maxFourierM");
         config(histogramMinimum, "histogramMinimum");
@@ -968,6 +984,12 @@ class apertureStroke : public mx::app::application
             std::cerr << "Gaussian smoothing and hard low-pass filtering are mutually exclusive\n";
             return -1;
         }
+        if((basisType == "hybrid" || basisType == "hybrid_fourier") &&
+           (hybridZernikeMin < 2 || hybridZernikeMax < hybridZernikeMin || hybridFourierN < 1))
+        {
+            std::cerr << "invalid hybrid Zernike range or Fourier cutoff\n";
+            return -1;
+        }
         return 0;
     }
 
@@ -1053,6 +1075,55 @@ class apertureStroke : public mx::app::application
                                          static_cast<realT>(0.5 * pupilDiameterPixels));
         }
 
+        if(basisType == "hybrid" || basisType == "hybrid_fourier")
+        {
+            int nZernikes = hybridZernikeMax - hybridZernikeMin + 1;
+            std::vector<mx::sigproc::fourierModeDef> fourierFrequencies;
+            if(mx::sigproc::makeFourierModeFreqs_Rect(fourierFrequencies, hybridFourierN) < 0)
+            {
+                std::cerr << "could not generate hybrid Fourier frequencies\n";
+                return -1;
+            }
+
+            modes.resize(pupil.rows(), pupil.cols(), nZernikes + fourierFrequencies.size());
+            cubeT zernikes;
+            if(pss::makeZernikeBasis(zernikes,
+                                     nZernikes,
+                                     pupil.rows(),
+                                     pupil.cols(),
+                                     static_cast<realT>(0.5 * pupilDiameterPixels),
+                                     hybridZernikeMin) < 0)
+            {
+                std::cerr << "could not generate hybrid Zernikes\n";
+                return -1;
+            }
+            for(int n = 0; n < nZernikes; ++n)
+            {
+                modes.image(n) = zernikes.image(n);
+            }
+            for(size_t n = 0; n < fourierFrequencies.size(); ++n)
+            {
+                const mx::sigproc::fourierModeDef & frequency = fourierFrequencies[n];
+                if(mx::sigproc::makeModifiedFourierMode(modes.image(nZernikes + n),
+                                                        frequency.m,
+                                                        frequency.n,
+                                                        frequency.p) < 0)
+                {
+                    std::cerr << "could not generate hybrid Fourier mode " << n << '\n';
+                    return -1;
+                }
+            }
+
+            nModes = modes.planes();
+            basisName = basisName.empty()
+                ? std::format("hybrid_z{}to{}_fourierRectN{}", hybridZernikeMin, hybridZernikeMax, hybridFourierN)
+                : pss::cleanLabel(basisName);
+            std::cerr << "hybrid primary basis: Zernike Noll " << hybridZernikeMin << '-' << hybridZernikeMax
+                      << " (" << nZernikes << " modes) + rectangular modified Fourier N=" << hybridFourierN
+                      << " (" << fourierFrequencies.size() << " modes) = " << nModes << " modes\n";
+            return 0;
+        }
+
         if(basisType == "file" || basisType == "fits")
         {
             if(basisFile.empty())
@@ -1087,7 +1158,7 @@ class apertureStroke : public mx::app::application
             return 0;
         }
 
-        std::cerr << "unknown basis type: " << basisType << " (expected zernike or file)\n";
+        std::cerr << "unknown basis type: " << basisType << " (expected zernike, hybrid, or file)\n";
         return -1;
     }
 
@@ -1314,6 +1385,9 @@ class apertureStroke : public mx::app::application
                << "basis.smoothingFwhm " << basisSmoothingFwhm << '\n'
                << "basis.smoothingStart " << basisSmoothingStart << '\n'
                << "basis.lowPassCutoff " << basisLowPassCutoff << '\n'
+               << "basis.hybridZernikeMin " << hybridZernikeMin << '\n'
+               << "basis.hybridZernikeMax " << hybridZernikeMax << '\n'
+               << "basis.hybridFourierN " << hybridFourierN << '\n'
                << "basis.fit " << pss::fitName(fitType) << '\n'
                << "basis.pinvAlpha " << pinvAlpha << '\n'
                << "basis.pinvMaxCondition " << pinvMaxCondition << '\n'
