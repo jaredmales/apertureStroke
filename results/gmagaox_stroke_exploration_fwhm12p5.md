@@ -129,7 +129,9 @@ root:
 ```
 
 Set `FORCE=1` to rerun finished case directories. Set `SEGMENT_MODES` if the
-GMT segment-PTT FITS cube is not at the configured default location.
+GMT segment-PTT FITS cube is not at the configured default location. The
+existing 6.5 m reference output is reused by default; set
+`RUN_REFERENCE_CASES=1` only when it must be regenerated.
 
 The 25.4 m cases are `circle_25m_fwhm12p5`, `gmt_25m_fwhm12p5`, and
 `gmt_25m_segmentPTT_fwhm12p5`; the 6.5 m reference cases are unchanged.

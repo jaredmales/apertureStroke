@@ -8,6 +8,7 @@ cd "$script_dir"
 n_trials="${1:-10000}"
 n_threads="${2:-0}"
 output_root="${3:-output/gmagaox_stroke_exploration}"
+run_reference_cases="${RUN_REFERENCE_CASES:-0}"
 
 segment_modes="${SEGMENT_MODES:-/home/jrmales/Source/mxWork/GMT/DMs/stroke/svd/p2v_25m_segment_zernike_pinv/gmt_segment_modes_182x182.fits}"
 
@@ -112,18 +113,24 @@ run_case()
     done
 }
 
-# Circular Kolmogorov baselines. Theory only applies to L0=infinity.
-for seeing in "${seeings[@]}"; do
-    run_theory exploration_circle_25m.conf circle_25m 1000 "$seeing"
-    run_theory exploration_circle_6p5m.conf circle_6p5m 100 "$seeing"
-done
+# The existing 6.5 m output supplies the reference distribution. By default,
+# run only the new 25.4 m FWHM=12.5 cases. Set RUN_REFERENCE_CASES=1 to
+# regenerate the 6.5 m cases and their circular Kolmogorov theory baselines.
+if [[ "$run_reference_cases" == "1" ]]; then
+    # Circular Kolmogorov baselines. Theory only applies to L0=infinity.
+    for seeing in "${seeings[@]}"; do
+        run_theory exploration_circle_25m.conf circle_25m 1000 "$seeing"
+        run_theory exploration_circle_6p5m.conf circle_6p5m 100 "$seeing"
+    done
+
+    run_case exploration_circle_6p5m.conf circle_6p5m circle_6p5m \
+        "0,20,40,60,80,100" 100
+    run_case exploration_magaox_6p5m.conf magaox_6p5m magaox_6p5m \
+        "0,20,40,60,80,100" 100
+fi
 
 run_case exploration_circle_25m.conf circle_25m_fwhm12p5 circle_25m_fwhm12p5 \
     "0,20,100,200,300,400,500,600,700,800,900,1000" 1000
-run_case exploration_circle_6p5m.conf circle_6p5m circle_6p5m \
-    "0,20,40,60,80,100" 100
-run_case exploration_magaox_6p5m.conf magaox_6p5m magaox_6p5m \
-    "0,20,40,60,80,100" 100
 run_case exploration_gmt_25m.conf gmt_25m_fwhm12p5 gmt_25m_fwhm12p5 \
     "0,20,100,200,300,400,500,600,700,800,900,1000" 1000
 run_case exploration_gmt_25m_segmentPTT.conf gmt_25m_segmentPTT_fwhm12p5 gmt_25m_fwhm12p5 \
